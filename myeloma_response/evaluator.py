@@ -68,6 +68,7 @@ class ResponseEvaluator:
     - Progression (Type Change): After CR, if |Kappa-Lambda| > 100
 
     For LCD type patients (SPEP < 0.5, |Kappa-Lambda| > 100):
+    - Progression (Type Change): SPEP >= 0.5 (possible change to IgG type)
     - CR: FLC ratio (Kappa/Lambda) in normal range (0.26~1.65)
     - VGPR: iFLC >= 90% decrease from baseline OR iFLC < 100
     - PR: iFLC >= 50% decrease from baseline
@@ -97,6 +98,7 @@ class ResponseEvaluator:
 
     # Type change threshold
     TYPE_CHANGE_FLC_DIFF = 100  # |Kappa - Lambda| > 100
+    SPEP_THRESHOLD = 0.5  # g/dL - for LCD type change detection
 
     def evaluate(
         self,
@@ -315,10 +317,11 @@ class ResponseEvaluator:
         Evaluate LCD type patients based on involved free light chain (iFLC).
 
         LCD Response Criteria:
+        - Progression (Type Change): SPEP >= 0.5 (possible change to IgG type)
         - CR: FLC ratio (Kappa/Lambda) in normal range (0.26~1.65)
         - VGPR: iFLC >= 90% decrease from baseline OR iFLC < 100
         - PR: iFLC >= 50% decrease from baseline
-        - PD: iFLC >= 25% increase from baseline OR absolute increase >= 100
+        - PD: iFLC >= 25% increase from nadir OR absolute increase >= 100 from nadir
         """
         timepoints = []
 
@@ -383,7 +386,7 @@ class ResponseEvaluator:
             # Determine current response using new LCD criteria
             current_response, response_notes = self._determine_lcd_response(
                 current_flc, kappa, lambda_, percent_change,
-                change_from_nadir, percent_increase_from_nadir, baseline_flc
+                change_from_nadir, percent_increase_from_nadir, baseline_flc, spep
             )
 
             # Update nadir
@@ -393,11 +396,11 @@ class ResponseEvaluator:
             # Confirmation logic (same as IgG)
             notes = response_notes
             if not progression_confirmed:
-                if current_response == ResponseType.PROGRESSION:
-                    if previous_responses and previous_responses[-1] == ResponseType.PROGRESSION:
-                        confirmed_response = ResponseType.PROGRESSION
+                if current_response in (ResponseType.PROGRESSION, ResponseType.PROGRESSION_TYPE_CHANGE):
+                    if previous_responses and previous_responses[-1] in (ResponseType.PROGRESSION, ResponseType.PROGRESSION_TYPE_CHANGE):
+                        confirmed_response = current_response
                         progression_confirmed = True
-                        notes = "Progression confirmed"
+                        notes = "Progression confirmed" if current_response == ResponseType.PROGRESSION else "Progression confirmed (Type 변경 가능!)"
                 elif current_response in (ResponseType.CR, ResponseType.VGPR, ResponseType.PR, ResponseType.MR):
                     if previous_responses and previous_responses[-1] == current_response:
                         confirmed_response = current_response
@@ -413,7 +416,7 @@ class ResponseEvaluator:
                 change_from_nadir=change_from_nadir,
                 nadir_value=nadir,
                 current_response=current_response,
-                confirmed_response=confirmed_response if not progression_confirmed else (ResponseType.PROGRESSION if progression_confirmed else None),
+                confirmed_response=confirmed_response,
                 notes=notes
             ))
 
@@ -429,12 +432,14 @@ class ResponseEvaluator:
         percent_change: float,
         change_from_nadir: float,
         percent_increase_from_nadir: float,
-        baseline_flc: float
+        baseline_flc: float,
+        spep: Optional[float] = None
     ) -> tuple[ResponseType, str]:
         """
         Determine response type for LCD patients based on FLC value.
 
         LCD Response Criteria:
+        - Progression (Type Change): SPEP >= 0.5 (possible change to IgG type)
         - CR: FLC ratio (Kappa/Lambda) in normal range (0.26~1.65)
         - VGPR: iFLC >= 90% decrease from baseline OR iFLC < 100
         - PR: iFLC >= 50% decrease from baseline
@@ -443,7 +448,11 @@ class ResponseEvaluator:
         Returns:
             Tuple of (ResponseType, notes string)
         """
-        # Check for CR first: FLC ratio in normal range (0.26~1.65)
+        # Check for type change first: SPEP >= 0.5 indicates possible change to IgG type
+        if spep is not None and spep >= self.SPEP_THRESHOLD:
+            return ResponseType.PROGRESSION_TYPE_CHANGE, f"SPEP ({spep:.2f}) >= 0.5, possible type change to IgG"
+
+        # Check for CR: FLC ratio in normal range (0.26~1.65)
         if self._check_flc_ratio_normal(kappa, lambda_):
             ratio = kappa / lambda_ if lambda_ and lambda_ != 0 else 0
             return ResponseType.CR, f"FLC ratio ({ratio:.2f}) normalized"

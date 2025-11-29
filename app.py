@@ -309,6 +309,7 @@ def main():
             st.markdown("""
             | 반응 | 기준 |
             |:----:|:-----|
+            | **Progression (Type 변경!)** | SPEP ≥ 0.5 (IgG 타입 변경 가능성) |
             | **CR** | FLC ratio 정상화 (0.26~1.65) |
             | **VGPR** | Baseline 대비 iFLC ≥90% 감소 또는 iFLC < 100 |
             | **PR** | Baseline 대비 iFLC ≥50% 감소 |
