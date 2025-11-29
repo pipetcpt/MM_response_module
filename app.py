@@ -214,12 +214,20 @@ def main():
                     return "background-color: #D3D3D3"  # Light gray
                 return ""
 
-            styled_df = df.style.applymap(
-                highlight_response,
-                subset=["Current Response", "Confirmed Response"]
-            )
-
-            st.dataframe(styled_df, use_container_width=True, height=400)
+            # Use map instead of applymap (deprecated in pandas 2.1+)
+            try:
+                styled_df = df.style.map(
+                    highlight_response,
+                    subset=["Current Response", "Confirmed Response"]
+                )
+                st.dataframe(styled_df, use_container_width=True, height=400)
+            except AttributeError:
+                # Fallback for older pandas versions
+                styled_df = df.style.applymap(
+                    highlight_response,
+                    subset=["Current Response", "Confirmed Response"]
+                )
+                st.dataframe(styled_df, use_container_width=True, height=400)
 
             # Statistics
             st.subheader("📊 Statistics")
