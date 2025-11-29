@@ -59,9 +59,9 @@ def evaluate_file(file_path: str, verbose: bool = False) -> EvaluationResult:
 
 def print_results(result: EvaluationResult) -> None:
     """Print evaluation results in a formatted table."""
-    print(f"\n{'='*100}")
+    print(f"\n{'='*120}")
     print(f"EVALUATION RESULTS")
-    print(f"{'='*100}")
+    print(f"{'='*120}")
     print(f"Patient Type: {result.patient_type.value}")
     print(f"Classification: {result.classification_reason}")
     print(f"\nBaseline Values:")
@@ -69,11 +69,39 @@ def print_results(result: EvaluationResult) -> None:
     print(f"  Kappa: {result.baseline_kappa}")
     print(f"  Lambda: {result.baseline_lambda}")
 
-    print(f"\n{'-'*100}")
-    print(f"{'Date':<20} {'SPEP':>8} {'Kappa':>10} {'Lambda':>10} {'%Change':>10} {'Nadir':>8} {'Current':>12} {'Confirmed':>12}")
-    print(f"{'-'*100}")
+    # Find key dates for summary
+    best_response = None
+    best_response_date = None
+    cr_date = None
+    progression_date = None
 
     for tp in result.timepoints:
+        if tp.confirmed_response:
+            if tp.confirmed_response == ResponseType.CR and cr_date is None:
+                cr_date = tp.date
+            if tp.confirmed_response == ResponseType.PROGRESSION and progression_date is None:
+                progression_date = tp.date
+            if tp.confirmed_response != ResponseType.PROGRESSION:
+                order = [ResponseType.SD, ResponseType.MR, ResponseType.PR, ResponseType.VGPR, ResponseType.CR]
+                if best_response is None or (tp.confirmed_response in order and
+                    order.index(tp.confirmed_response) > order.index(best_response)):
+                    best_response = tp.confirmed_response
+                    best_response_date = tp.date
+
+    print(f"\nResponse Summary:")
+    print(f"  Best Response: {best_response.value if best_response else 'N/A'} ({best_response_date.strftime('%Y-%m-%d') if best_response_date else 'N/A'})")
+    if cr_date:
+        print(f"  CR Achieved: {cr_date.strftime('%Y-%m-%d')}")
+    if progression_date:
+        print(f"  Progression: {progression_date.strftime('%Y-%m-%d')}")
+
+    print(f"\n{'='*120}")
+    print(f"SERIAL RESPONSE EVALUATION")
+    print(f"{'='*120}")
+    print(f"{'#':>3} {'Date':<12} {'SPEP':>8} {'Kappa':>10} {'Lambda':>10} {'%Change':>10} {'Nadir':>8} {'Current':>12} {'Confirmed':>12}")
+    print(f"{'-'*120}")
+
+    for idx, tp in enumerate(result.timepoints):
         date_str = tp.date.strftime("%Y-%m-%d") if tp.date else "N/A"
         spep_str = f"{tp.spep:.2f}" if tp.spep is not None else "N/A"
         kappa_str = f"{tp.kappa:.2f}" if tp.kappa is not None else "N/A"
@@ -83,22 +111,24 @@ def print_results(result: EvaluationResult) -> None:
         current_str = tp.current_response.value if tp.current_response else "N/A"
         confirmed_str = tp.confirmed_response.value if tp.confirmed_response else ""
 
-        print(f"{date_str:<20} {spep_str:>8} {kappa_str:>10} {lambda_str:>10} {pct_str:>10} {nadir_str:>8} {current_str:>12} {confirmed_str:>12}")
+        print(f"{idx+1:>3} {date_str:<12} {spep_str:>8} {kappa_str:>10} {lambda_str:>10} {pct_str:>10} {nadir_str:>8} {current_str:>12} {confirmed_str:>12}")
 
-    print(f"{'-'*100}")
+    print(f"{'-'*120}")
+    print(f"Total timepoints: {len(result.timepoints)}")
 
 
 def results_to_dataframe(result: EvaluationResult) -> pd.DataFrame:
     """Convert evaluation results to a pandas DataFrame."""
     data = []
-    for tp in result.timepoints:
+    for idx, tp in enumerate(result.timepoints):
         data.append({
-            "Date": tp.date.strftime("%Y-%m-%d %H:%M") if tp.date else None,
+            "Timepoint": idx + 1,
+            "Date": tp.date.strftime("%Y-%m-%d") if tp.date else None,
             "SPEP": tp.spep,
             "Kappa": tp.kappa,
             "Lambda": tp.lambda_,
             "UPEP": tp.upep,
-            "%Change from Baseline": round(tp.percent_change_from_baseline, 2) if tp.percent_change_from_baseline is not None else None,
+            "%Change from Baseline": round(tp.percent_change_from_baseline, 1) if tp.percent_change_from_baseline is not None else None,
             "Change from Nadir": round(tp.change_from_nadir, 4) if tp.change_from_nadir is not None else None,
             "Nadir": tp.nadir_value,
             "Current Response": tp.current_response.value if tp.current_response else None,
@@ -178,16 +208,34 @@ def process_folder(folder_path: str, output_folder: str = None, verbose: bool = 
 
 
 def create_summary_report(results: dict, output_path: str) -> None:
-    """Create a summary report of all processed files."""
+    """Create a summary report of all processed files with detailed serial results."""
     summary_data = []
+    serial_data = []  # For detailed serial results
 
     for filename, result in results.items():
         # Find the best confirmed response and latest status
         best_response = None
         final_response = None
         progression_date = None
+        best_response_date = None
 
-        for tp in result.timepoints:
+        for idx, tp in enumerate(result.timepoints):
+            # Add to serial data
+            serial_data.append({
+                "File": filename,
+                "Patient Type": result.patient_type.value,
+                "Timepoint": idx + 1,
+                "Date": tp.date.strftime("%Y-%m-%d") if tp.date else None,
+                "SPEP": tp.spep,
+                "Kappa": tp.kappa,
+                "Lambda": tp.lambda_,
+                "UPEP": tp.upep,
+                "%Change from Baseline": round(tp.percent_change_from_baseline, 1) if tp.percent_change_from_baseline is not None else None,
+                "Nadir": tp.nadir_value,
+                "Current Response": tp.current_response.value if tp.current_response else None,
+                "Confirmed Response": tp.confirmed_response.value if tp.confirmed_response else None,
+            })
+
             if tp.confirmed_response:
                 final_response = tp.confirmed_response
                 if tp.confirmed_response == ResponseType.PROGRESSION:
@@ -197,12 +245,14 @@ def create_summary_report(results: dict, output_path: str) -> None:
                 if tp.confirmed_response != ResponseType.PROGRESSION:
                     if best_response is None:
                         best_response = tp.confirmed_response
+                        best_response_date = tp.date
                     else:
                         # Compare responses
                         order = [ResponseType.SD, ResponseType.MR, ResponseType.PR, ResponseType.VGPR, ResponseType.CR]
                         try:
                             if order.index(tp.confirmed_response) > order.index(best_response):
                                 best_response = tp.confirmed_response
+                                best_response_date = tp.date
                         except ValueError:
                             pass
 
@@ -213,14 +263,30 @@ def create_summary_report(results: dict, output_path: str) -> None:
             "Baseline Kappa": result.baseline_kappa,
             "Baseline Lambda": result.baseline_lambda,
             "Best Response": best_response.value if best_response else "N/A",
+            "Best Response Date": best_response_date.strftime("%Y-%m-%d") if best_response_date else "",
             "Final Status": final_response.value if final_response else "N/A",
             "Progression Date": progression_date.strftime("%Y-%m-%d") if progression_date else "",
             "Total Timepoints": len(result.timepoints)
         })
 
-    df = pd.DataFrame(summary_data)
-    df.to_excel(output_path, index=False)
+    # Create Excel with multiple sheets
+    with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
+        # Summary sheet
+        pd.DataFrame(summary_data).to_excel(writer, sheet_name="Summary", index=False)
+
+        # Serial results sheet (all timepoints for all patients)
+        pd.DataFrame(serial_data).to_excel(writer, sheet_name="Serial Results", index=False)
+
+        # Individual patient sheets (one sheet per patient)
+        for filename, result in results.items():
+            sheet_name = filename.replace(".xlsx", "")[:31]  # Excel sheet name limit
+            df = results_to_dataframe(result)
+            df.to_excel(writer, sheet_name=sheet_name, index=False)
+
     print(f"Summary report saved to: {output_path}")
+    print(f"  - Summary sheet: Overall patient summary")
+    print(f"  - Serial Results sheet: All timepoints for all patients")
+    print(f"  - Individual patient sheets: Detailed results per patient")
 
 
 def main():
