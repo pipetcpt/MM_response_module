@@ -279,11 +279,11 @@ def main():
         - **IgG_Kappa**: Kappa > Lambda
         - **IgG_Lambda**: Lambda ≥ Kappa
 
-        **2. LCD 타입** (SPEP < 0.5 g/dL AND |Kappa-Lambda| ≥ 100)
+        **2. LCD 타입** (SPEP < 0.5 g/dL AND |Kappa-Lambda| > 100)
         - **LCD_Kappa**: Kappa > Lambda (iFLC = Kappa)
         - **LCD_Lambda**: Lambda > Kappa (iFLC = Lambda)
 
-        **3. Unclassified**: SPEP < 0.5 AND |Kappa-Lambda| < 100
+        **3. Unclassified**: SPEP < 0.5 AND |Kappa-Lambda| ≤ 100
         """)
 
         st.markdown("---")
@@ -309,10 +309,11 @@ def main():
             st.markdown("""
             | 반응 | 기준 |
             |:----:|:-----|
+            | **Progression (Type 변경!)** | SPEP ≥ 0.5 (IgG 타입 변경 가능성) |
             | **CR** | FLC ratio 정상화 (0.26~1.65) |
-            | **VGPR** | iFLC ≥90% 감소 또는 iFLC < 100 |
-            | **PR** | iFLC ≥50% 감소 |
-            | **PD** | iFLC ≥25% 증가 또는 절대 증가 ≥100 |
+            | **VGPR** | Baseline 대비 iFLC ≥90% 감소 또는 iFLC < 100 |
+            | **PR** | Baseline 대비 iFLC ≥50% 감소 |
+            | **PD** | Nadir 대비 iFLC ≥25% 증가 또는 절대 증가 ≥100 |
             """)
             st.caption("※ iFLC = involved FLC (LCD_Kappa→Kappa, LCD_Lambda→Lambda)")
 
