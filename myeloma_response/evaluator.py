@@ -20,6 +20,7 @@ class ResponseType(Enum):
     MR = "MR"  # Minor Response
     SD = "SD"  # Stable Disease
     PROGRESSION = "Progression"
+    PROGRESSION_TYPE_CHANGE = "Progression (Type 변경 가능!)"  # Progression with possible type change
     NOT_EVALUABLE = "NE"  # Not Evaluable
 
     def __str__(self):
@@ -64,17 +65,38 @@ class ResponseEvaluator:
     - VGPR: >= 85% reduction
     - CR: SPEP = 0
     - Progression: increase > 0.45 g/dL from nadir
+    - Progression (Type Change): After CR, if |Kappa-Lambda| > 100
+
+    For LCD type patients (SPEP < 0.5, |Kappa-Lambda| >= 100):
+    - CR: FLC ratio (Kappa/Lambda) in normal range (0.26~1.65)
+    - VGPR: iFLC >= 90% decrease OR iFLC < 100
+    - PR: iFLC >= 50% decrease
+    - PD: iFLC >= 25% increase OR absolute increase >= 100
 
     Confirmation requires 2 consecutive identical responses.
     """
 
-    # Response thresholds (percentage reduction from baseline)
+    # IgG Response thresholds (percentage reduction from baseline)
     MR_THRESHOLD = 15.0
     PR_THRESHOLD = 45.0
     VGPR_THRESHOLD = 85.0
 
-    # Progression threshold (absolute increase from nadir in g/dL)
+    # IgG Progression threshold (absolute increase from nadir in g/dL)
     PROGRESSION_THRESHOLD = 0.45
+
+    # LCD Response thresholds
+    LCD_VGPR_THRESHOLD = 90.0  # 90% decrease
+    LCD_PR_THRESHOLD = 50.0    # 50% decrease
+    LCD_PD_PERCENT_THRESHOLD = 25.0  # 25% increase
+    LCD_PD_ABSOLUTE_THRESHOLD = 100  # Absolute increase >= 100
+    LCD_VGPR_ABSOLUTE_THRESHOLD = 100  # iFLC < 100 for VGPR
+
+    # FLC ratio normal range
+    FLC_RATIO_LOW = 0.26
+    FLC_RATIO_HIGH = 1.65
+
+    # Type change threshold
+    TYPE_CHANGE_FLC_DIFF = 100  # |Kappa - Lambda| > 100
 
     def evaluate(
         self,
@@ -108,6 +130,19 @@ class ResponseEvaluator:
 
         return result
 
+    def _check_flc_ratio_normal(self, kappa: Optional[float], lambda_: Optional[float]) -> bool:
+        """Check if FLC ratio is in normal range (0.26~1.65)."""
+        if kappa is None or lambda_ is None or lambda_ == 0:
+            return False
+        ratio = kappa / lambda_
+        return self.FLC_RATIO_LOW <= ratio <= self.FLC_RATIO_HIGH
+
+    def _check_type_change_possible(self, kappa: Optional[float], lambda_: Optional[float]) -> bool:
+        """Check if type change to LCD is possible (|Kappa - Lambda| > 100)."""
+        if kappa is None or lambda_ is None:
+            return False
+        return abs(kappa - lambda_) > self.TYPE_CHANGE_FLC_DIFF
+
     def _evaluate_igg_type(
         self,
         lab_data: LabData,
@@ -140,6 +175,7 @@ class ResponseEvaluator:
         previous_responses: list[ResponseType] = []
         confirmed_response: Optional[ResponseType] = None
         progression_confirmed = False
+        cr_achieved = False  # Track if CR was ever achieved
 
         for i in range(len(lab_data)):
             spep = lab_data.spep[i]
@@ -175,19 +211,30 @@ class ResponseEvaluator:
                 spep, percent_change, change_from_nadir
             )
 
+            # Track if CR was achieved
+            if current_response == ResponseType.CR:
+                cr_achieved = True
+
+            # Check for type change possibility after CR
+            # If CR was achieved but now |Kappa - Lambda| > 100, it could be LCD progression
+            notes = ""
+            if cr_achieved and change_from_nadir <= self.PROGRESSION_THRESHOLD:
+                if self._check_type_change_possible(kappa, lambda_):
+                    current_response = ResponseType.PROGRESSION_TYPE_CHANGE
+                    notes = "FLC difference > 100, possible LCD type progression"
+
             # Update nadir if current value is lower
             if spep < nadir:
                 nadir = spep
 
             # Determine confirmed response
-            notes = ""
             if not progression_confirmed:
-                if current_response == ResponseType.PROGRESSION:
+                if current_response in (ResponseType.PROGRESSION, ResponseType.PROGRESSION_TYPE_CHANGE):
                     # Check if progression is confirmed (2 consecutive)
-                    if previous_responses and previous_responses[-1] == ResponseType.PROGRESSION:
-                        confirmed_response = ResponseType.PROGRESSION
+                    if previous_responses and previous_responses[-1] in (ResponseType.PROGRESSION, ResponseType.PROGRESSION_TYPE_CHANGE):
+                        confirmed_response = current_response
                         progression_confirmed = True
-                        notes = "Progression confirmed"
+                        notes = "Progression confirmed" if current_response == ResponseType.PROGRESSION else "Progression confirmed (Type 변경 가능!)"
                 elif current_response in (ResponseType.CR, ResponseType.VGPR, ResponseType.PR, ResponseType.MR):
                     # Check if response is confirmed (2 consecutive)
                     if previous_responses and previous_responses[-1] == current_response:
@@ -212,7 +259,7 @@ class ResponseEvaluator:
                 change_from_nadir=change_from_nadir,
                 nadir_value=nadir,
                 current_response=current_response,
-                confirmed_response=confirmed_response if not (progression_confirmed and current_response != ResponseType.PROGRESSION) else (ResponseType.PROGRESSION if progression_confirmed else None),
+                confirmed_response=confirmed_response if not (progression_confirmed and current_response not in (ResponseType.PROGRESSION, ResponseType.PROGRESSION_TYPE_CHANGE)) else (confirmed_response if progression_confirmed else None),
                 notes=notes
             ))
 
@@ -267,8 +314,11 @@ class ResponseEvaluator:
         """
         Evaluate LCD type patients based on involved free light chain (iFLC).
 
-        For LCD patients, use the involved FLC (Kappa or Lambda) for evaluation
-        with similar thresholds as IgG type.
+        LCD Response Criteria:
+        - CR: FLC ratio (Kappa/Lambda) in normal range (0.26~1.65)
+        - VGPR: iFLC >= 90% decrease from baseline OR iFLC < 100
+        - PR: iFLC >= 50% decrease from baseline
+        - PD: iFLC >= 25% increase from baseline OR absolute increase >= 100
         """
         timepoints = []
 
@@ -298,10 +348,6 @@ class ResponseEvaluator:
         confirmed_response: Optional[ResponseType] = None
         progression_confirmed = False
 
-        # FLC progression threshold (100% increase from nadir, minimum 10 mg/L increase)
-        FLC_PROGRESSION_PERCENT = 100
-        FLC_PROGRESSION_MIN = 10
-
         for i in range(len(lab_data)):
             spep = lab_data.spep[i]
             kappa = lab_data.kappa[i]
@@ -327,17 +373,17 @@ class ResponseEvaluator:
                 ))
                 continue
 
-            # Calculate percent change from baseline
+            # Calculate percent change from baseline (positive = decrease)
             percent_change = ((baseline_flc - current_flc) / baseline_flc) * 100
 
             # Calculate change from nadir
             change_from_nadir = current_flc - nadir
-            percent_increase_from_nadir = (change_from_nadir / nadir * 100) if nadir > 0 else 0
+            percent_increase_from_nadir = ((current_flc - nadir) / nadir * 100) if nadir > 0 else 0
 
-            # Determine current response
-            current_response = self._determine_lcd_response(
-                current_flc, percent_change, change_from_nadir, percent_increase_from_nadir,
-                FLC_PROGRESSION_PERCENT, FLC_PROGRESSION_MIN
+            # Determine current response using new LCD criteria
+            current_response, response_notes = self._determine_lcd_response(
+                current_flc, kappa, lambda_, percent_change,
+                change_from_nadir, percent_increase_from_nadir, baseline_flc
             )
 
             # Update nadir
@@ -345,7 +391,7 @@ class ResponseEvaluator:
                 nadir = current_flc
 
             # Confirmation logic (same as IgG)
-            notes = ""
+            notes = response_notes
             if not progression_confirmed:
                 if current_response == ResponseType.PROGRESSION:
                     if previous_responses and previous_responses[-1] == ResponseType.PROGRESSION:
@@ -377,29 +423,47 @@ class ResponseEvaluator:
 
     def _determine_lcd_response(
         self,
-        flc: float,
+        current_flc: float,
+        kappa: Optional[float],
+        lambda_: Optional[float],
         percent_change: float,
         change_from_nadir: float,
         percent_increase_from_nadir: float,
-        progression_percent: float,
-        progression_min: float
-    ) -> ResponseType:
-        """Determine response type for LCD patients based on FLC value."""
-        # CR: FLC normalized (simplified - would need reference range in real implementation)
-        # For now, use similar thresholds as IgG
+        baseline_flc: float
+    ) -> tuple[ResponseType, str]:
+        """
+        Determine response type for LCD patients based on FLC value.
 
-        # Progression: 100% increase from nadir AND at least 10 mg/L increase
-        if percent_increase_from_nadir >= progression_percent and change_from_nadir >= progression_min:
-            return ResponseType.PROGRESSION
+        Returns:
+            Tuple of (ResponseType, notes string)
+        """
+        # Check for CR first: FLC ratio in normal range (0.26~1.65)
+        if self._check_flc_ratio_normal(kappa, lambda_):
+            ratio = kappa / lambda_ if lambda_ and lambda_ != 0 else 0
+            return ResponseType.CR, f"FLC ratio ({ratio:.2f}) normalized"
 
-        if percent_change >= self.VGPR_THRESHOLD:
-            return ResponseType.VGPR
-        elif percent_change >= self.PR_THRESHOLD:
-            return ResponseType.PR
-        elif percent_change >= self.MR_THRESHOLD:
-            return ResponseType.MR
-        else:
-            return ResponseType.SD
+        # Check for Progression (PD):
+        # iFLC >= 25% increase from baseline OR absolute increase >= 100
+        percent_increase_from_baseline = -percent_change  # Convert to increase
+        if percent_increase_from_baseline >= self.LCD_PD_PERCENT_THRESHOLD:
+            return ResponseType.PROGRESSION, f"iFLC increased {percent_increase_from_baseline:.1f}% from baseline"
+
+        absolute_increase_from_baseline = current_flc - baseline_flc
+        if absolute_increase_from_baseline >= self.LCD_PD_ABSOLUTE_THRESHOLD:
+            return ResponseType.PROGRESSION, f"iFLC absolute increase {absolute_increase_from_baseline:.1f} >= 100"
+
+        # Check for VGPR: iFLC >= 90% decrease OR iFLC < 100
+        if percent_change >= self.LCD_VGPR_THRESHOLD:
+            return ResponseType.VGPR, f"iFLC decreased {percent_change:.1f}% from baseline"
+        if current_flc < self.LCD_VGPR_ABSOLUTE_THRESHOLD:
+            return ResponseType.VGPR, f"iFLC ({current_flc:.1f}) < 100"
+
+        # Check for PR: iFLC >= 50% decrease
+        if percent_change >= self.LCD_PR_THRESHOLD:
+            return ResponseType.PR, f"iFLC decreased {percent_change:.1f}% from baseline"
+
+        # Otherwise, stable disease
+        return ResponseType.SD, ""
 
     def _evaluate_unclassified(self, lab_data: LabData) -> list[TimePointResult]:
         """Evaluate unclassified patients - limited evaluation possible."""

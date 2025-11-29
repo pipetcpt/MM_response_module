@@ -211,6 +211,8 @@ def main():
                         return "background-color: #FAFAD2"  # Light goldenrod
                     elif val == "Progression":
                         return "background-color: #FFB6C1"  # Light pink
+                    elif val == "Progression (Type 변경 가능!)":
+                        return "background-color: #FFA500"  # Orange - type change warning
                     elif val == "NE":
                         return "background-color: #D3D3D3"  # Light gray
                     return ""
@@ -270,25 +272,27 @@ def main():
         st.markdown("---")
         st.markdown("### 평가 기준")
 
+        # Patient Classification
+        st.markdown("#### 환자 분류")
+        st.markdown("""
+        **1. IgG 타입** (SPEP ≥ 0.5 g/dL)
+        - **IgG_Kappa**: Kappa > Lambda
+        - **IgG_Lambda**: Lambda ≥ Kappa
+
+        **2. LCD 타입** (SPEP < 0.5 g/dL AND |Kappa-Lambda| ≥ 100)
+        - **LCD_Kappa**: Kappa > Lambda (iFLC = Kappa)
+        - **LCD_Lambda**: Lambda > Kappa (iFLC = Lambda)
+
+        **3. Unclassified**: SPEP < 0.5 AND |Kappa-Lambda| < 100
+        """)
+
+        st.markdown("---")
+
+        # Response Evaluation
         col1, col2 = st.columns(2)
 
         with col1:
-            st.markdown("#### 환자 분류")
-            st.markdown("""
-            **1. IgG 타입** (SPEP ≥ 0.5 g/dL)
-            - **IgG_Kappa**: Kappa > Lambda
-            - **IgG_Lambda**: Lambda ≥ Kappa
-
-            **2. LCD 타입** (SPEP < 0.5 g/dL AND |Kappa-Lambda| ≥ 100)
-            - **LCD_Kappa**: Kappa > Lambda
-            - **LCD_Lambda**: Lambda > Kappa
-
-            **3. Unclassified**
-            - SPEP < 0.5 AND |Kappa-Lambda| < 100
-            """)
-
-        with col2:
-            st.markdown("#### 반응 평가 (IgG 타입 기준)")
+            st.markdown("#### IgG 타입 반응 평가")
             st.markdown("""
             | 반응 | 기준 |
             |:----:|:-----|
@@ -297,7 +301,20 @@ def main():
             | **VGPR** | Baseline 대비 ≥85% 감소 |
             | **CR** | SPEP = 0 |
             | **Progression** | Nadir 대비 >0.45 g/dL 상승 |
+            | **Progression (Type 변경!)** | CR 이후 \|Kappa-Lambda\| > 100 |
             """)
+
+        with col2:
+            st.markdown("#### LCD 타입 반응 평가")
+            st.markdown("""
+            | 반응 | 기준 |
+            |:----:|:-----|
+            | **CR** | FLC ratio 정상화 (0.26~1.65) |
+            | **VGPR** | iFLC ≥90% 감소 또는 iFLC < 100 |
+            | **PR** | iFLC ≥50% 감소 |
+            | **PD** | iFLC ≥25% 증가 또는 절대 증가 ≥100 |
+            """)
+            st.caption("※ iFLC = involved FLC (LCD_Kappa→Kappa, LCD_Lambda→Lambda)")
 
         st.markdown("---")
         st.info("💡 **Note:** 반응 확정(Confirmed Response)은 **2회 연속** 동일한 반응이 필요합니다.")
