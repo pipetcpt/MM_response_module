@@ -72,7 +72,8 @@ class ResponseEvaluator:
     - CR: FLC ratio (Kappa/Lambda) in normal range (0.26~1.65)
     - VGPR: iFLC >= 90% decrease from baseline OR iFLC < 100
     - PR: iFLC >= 50% decrease from baseline
-    - PD: iFLC >= 25% increase from nadir OR absolute increase >= 100 from nadir
+    - PD: iFLC >= 25% increase from nadir AND absolute increase >= 100 from nadir
+    - Note: If only 25% increase → SD with "다른 증상 확인 필요!"
 
     Confirmation requires 2 consecutive identical responses.
     """
@@ -321,7 +322,7 @@ class ResponseEvaluator:
         - CR: FLC ratio (Kappa/Lambda) in normal range (0.26~1.65)
         - VGPR: iFLC >= 90% decrease from baseline OR iFLC < 100
         - PR: iFLC >= 50% decrease from baseline
-        - PD: iFLC >= 25% increase from nadir OR absolute increase >= 100 from nadir
+        - PD: iFLC >= 25% increase from nadir AND absolute increase >= 100 from nadir
         """
         timepoints = []
 
@@ -443,7 +444,8 @@ class ResponseEvaluator:
         - CR: FLC ratio (Kappa/Lambda) in normal range (0.26~1.65)
         - VGPR: iFLC >= 90% decrease from baseline OR iFLC < 100
         - PR: iFLC >= 50% decrease from baseline
-        - PD: iFLC >= 25% increase from nadir OR absolute increase >= 100 from nadir
+        - PD: iFLC >= 25% increase from nadir AND absolute increase >= 100 from nadir
+        - Note: If only 25% increase is met, returns SD with "다른 증상 확인 필요!"
 
         Returns:
             Tuple of (ResponseType, notes string)
@@ -458,12 +460,12 @@ class ResponseEvaluator:
             return ResponseType.CR, f"FLC ratio ({ratio:.2f}) normalized"
 
         # Check for Progression (PD):
-        # iFLC >= 25% increase from nadir OR absolute increase >= 100 from nadir
-        if percent_increase_from_nadir >= self.LCD_PD_PERCENT_THRESHOLD:
-            return ResponseType.PROGRESSION, f"iFLC increased {percent_increase_from_nadir:.1f}% from nadir"
+        # iFLC >= 25% increase from nadir AND absolute increase >= 100 from nadir
+        has_percent_increase = percent_increase_from_nadir >= self.LCD_PD_PERCENT_THRESHOLD
+        has_absolute_increase = change_from_nadir >= self.LCD_PD_ABSOLUTE_THRESHOLD
 
-        if change_from_nadir >= self.LCD_PD_ABSOLUTE_THRESHOLD:
-            return ResponseType.PROGRESSION, f"iFLC absolute increase {change_from_nadir:.1f} >= 100 from nadir"
+        if has_percent_increase and has_absolute_increase:
+            return ResponseType.PROGRESSION, f"iFLC increased {percent_increase_from_nadir:.1f}% from nadir (절대 증가 {change_from_nadir:.1f})"
 
         # Check for VGPR: iFLC >= 90% decrease from baseline OR iFLC < 100
         if percent_change >= self.LCD_VGPR_THRESHOLD:
@@ -474,6 +476,10 @@ class ResponseEvaluator:
         # Check for PR: iFLC >= 50% decrease from baseline
         if percent_change >= self.LCD_PR_THRESHOLD:
             return ResponseType.PR, f"iFLC decreased {percent_change:.1f}% from baseline"
+
+        # Check if only 25% increase condition is met (need to check other symptoms)
+        if has_percent_increase and not has_absolute_increase:
+            return ResponseType.SD, f"iFLC {percent_increase_from_nadir:.1f}% 증가 (다른 증상 확인 필요!)"
 
         # Otherwise, stable disease
         return ResponseType.SD, ""

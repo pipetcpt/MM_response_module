@@ -362,9 +362,10 @@ def main():
             | **CR** | FLC ratio 정상화 (0.26~1.65) |
             | **VGPR** | Baseline 대비 iFLC ≥90% 감소 또는 iFLC < 100 |
             | **PR** | Baseline 대비 iFLC ≥50% 감소 |
-            | **PD** | Nadir 대비 iFLC ≥25% 증가 또는 절대 증가 ≥100 |
+            | **PD** | Nadir 대비 iFLC ≥25% 증가 **AND** 절대 증가 ≥100 |
             """)
             st.caption("※ iFLC = involved FLC (LCD_Kappa→Kappa, LCD_Lambda→Lambda)")
+            st.caption("※ iFLC 25% 증가만 충족 시 → SD (다른 증상 확인 필요!)")
 
         st.markdown("---")
         st.info("💡 **Note:** 반응 확정(Confirmed Response)은 **2회 연속** 동일한 반응이 필요합니다.")
