@@ -198,36 +198,31 @@ def main():
             st.subheader("📋 Serial Response Evaluation")
             df = create_results_dataframe(result)
 
-            # Style the dataframe
-            def highlight_response(val):
-                if val == "CR":
-                    return "background-color: #90EE90"  # Light green
-                elif val == "VGPR":
-                    return "background-color: #98FB98"  # Pale green
-                elif val == "PR":
-                    return "background-color: #FFFFE0"  # Light yellow
-                elif val == "MR":
-                    return "background-color: #FAFAD2"  # Light goldenrod
-                elif val == "Progression":
-                    return "background-color: #FFB6C1"  # Light pink
-                elif val == "NE":
-                    return "background-color: #D3D3D3"  # Light gray
-                return ""
-
-            # Use map instead of applymap (deprecated in pandas 2.1+)
+            # Try to style the dataframe (requires jinja2)
             try:
+                def highlight_response(val):
+                    if val == "CR":
+                        return "background-color: #90EE90"  # Light green
+                    elif val == "VGPR":
+                        return "background-color: #98FB98"  # Pale green
+                    elif val == "PR":
+                        return "background-color: #FFFFE0"  # Light yellow
+                    elif val == "MR":
+                        return "background-color: #FAFAD2"  # Light goldenrod
+                    elif val == "Progression":
+                        return "background-color: #FFB6C1"  # Light pink
+                    elif val == "NE":
+                        return "background-color: #D3D3D3"  # Light gray
+                    return ""
+
                 styled_df = df.style.map(
                     highlight_response,
                     subset=["Current Response", "Confirmed Response"]
                 )
                 st.dataframe(styled_df, use_container_width=True, height=400)
-            except AttributeError:
-                # Fallback for older pandas versions
-                styled_df = df.style.applymap(
-                    highlight_response,
-                    subset=["Current Response", "Confirmed Response"]
-                )
-                st.dataframe(styled_df, use_container_width=True, height=400)
+            except (ImportError, AttributeError):
+                # Fallback: show without styling if jinja2 is not installed
+                st.dataframe(df, use_container_width=True, height=400)
 
             # Statistics
             st.subheader("📊 Statistics")
