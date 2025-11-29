@@ -261,32 +261,46 @@ def main():
         ### 사용 방법
         1. 왼쪽 사이드바에서 **Excel 파일**을 업로드합니다.
         2. 파일에는 다음 데이터가 포함되어야 합니다:
-           - **SPEP** (Monoclonal peak)
+           - **SPEP** (Monoclonal peak, M-protein)
            - **serum Kappa** (Kappa light chain)
            - **serum Lambda** (Lambda light chain)
            - UPEP (선택사항)
-
-        ### 평가 기준
-
-        #### 환자 분류
-        | 조건 | 분류 |
-        |------|------|
-        | SPEP ≥ 0.5, Kappa > Lambda | IgG_Kappa |
-        | SPEP ≥ 0.5, Lambda ≥ Kappa | IgG_Lambda |
-        | SPEP < 0.5, |Kappa-Lambda| ≥ 100, Kappa 우세 | LCD_Kappa |
-        | SPEP < 0.5, |Kappa-Lambda| ≥ 100, Lambda 우세 | LCD_Lambda |
-
-        #### 반응 평가 (IgG 타입)
-        | 반응 | 기준 |
-        |------|------|
-        | MR | Baseline 대비 ≥15% 감소 |
-        | PR | Baseline 대비 ≥45% 감소 |
-        | VGPR | Baseline 대비 ≥85% 감소 |
-        | CR | SPEP = 0 |
-        | Progression | Nadir 대비 >0.45 상승 |
-
-        **Note:** 반응 확정은 2회 연속 동일한 반응 필요
         """)
+
+        st.markdown("---")
+        st.markdown("### 평가 기준")
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.markdown("#### 환자 분류")
+            st.markdown("""
+            **1. IgG 타입** (SPEP ≥ 0.5 g/dL)
+            - **IgG_Kappa**: Kappa > Lambda
+            - **IgG_Lambda**: Lambda ≥ Kappa
+
+            **2. LCD 타입** (SPEP < 0.5 g/dL AND |Kappa-Lambda| ≥ 100)
+            - **LCD_Kappa**: Kappa > Lambda
+            - **LCD_Lambda**: Lambda > Kappa
+
+            **3. Unclassified**
+            - SPEP < 0.5 AND |Kappa-Lambda| < 100
+            """)
+
+        with col2:
+            st.markdown("#### 반응 평가 (IgG 타입 기준)")
+            st.markdown("""
+            | 반응 | 기준 |
+            |:----:|:-----|
+            | **MR** | Baseline 대비 ≥15% 감소 |
+            | **PR** | Baseline 대비 ≥45% 감소 |
+            | **VGPR** | Baseline 대비 ≥85% 감소 |
+            | **CR** | SPEP = 0 |
+            | **Progression** | Nadir 대비 >0.45 g/dL 상승 |
+            """)
+
+        st.markdown("---")
+        st.info("💡 **Note:** 반응 확정(Confirmed Response)은 **2회 연속** 동일한 반응이 필요합니다.")
 
 
 if __name__ == "__main__":
