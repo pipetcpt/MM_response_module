@@ -67,11 +67,11 @@ class ResponseEvaluator:
     - Progression: increase > 0.45 g/dL from nadir
     - Progression (Type Change): After CR, if |Kappa-Lambda| > 100
 
-    For LCD type patients (SPEP < 0.5, |Kappa-Lambda| >= 100):
+    For LCD type patients (SPEP < 0.5, |Kappa-Lambda| > 100):
     - CR: FLC ratio (Kappa/Lambda) in normal range (0.26~1.65)
-    - VGPR: iFLC >= 90% decrease OR iFLC < 100
-    - PR: iFLC >= 50% decrease
-    - PD: iFLC >= 25% increase OR absolute increase >= 100
+    - VGPR: iFLC >= 90% decrease from baseline OR iFLC < 100
+    - PR: iFLC >= 50% decrease from baseline
+    - PD: iFLC >= 25% increase from nadir OR absolute increase >= 100 from nadir
 
     Confirmation requires 2 consecutive identical responses.
     """
@@ -434,6 +434,12 @@ class ResponseEvaluator:
         """
         Determine response type for LCD patients based on FLC value.
 
+        LCD Response Criteria:
+        - CR: FLC ratio (Kappa/Lambda) in normal range (0.26~1.65)
+        - VGPR: iFLC >= 90% decrease from baseline OR iFLC < 100
+        - PR: iFLC >= 50% decrease from baseline
+        - PD: iFLC >= 25% increase from nadir OR absolute increase >= 100 from nadir
+
         Returns:
             Tuple of (ResponseType, notes string)
         """
@@ -443,22 +449,20 @@ class ResponseEvaluator:
             return ResponseType.CR, f"FLC ratio ({ratio:.2f}) normalized"
 
         # Check for Progression (PD):
-        # iFLC >= 25% increase from baseline OR absolute increase >= 100
-        percent_increase_from_baseline = -percent_change  # Convert to increase
-        if percent_increase_from_baseline >= self.LCD_PD_PERCENT_THRESHOLD:
-            return ResponseType.PROGRESSION, f"iFLC increased {percent_increase_from_baseline:.1f}% from baseline"
+        # iFLC >= 25% increase from nadir OR absolute increase >= 100 from nadir
+        if percent_increase_from_nadir >= self.LCD_PD_PERCENT_THRESHOLD:
+            return ResponseType.PROGRESSION, f"iFLC increased {percent_increase_from_nadir:.1f}% from nadir"
 
-        absolute_increase_from_baseline = current_flc - baseline_flc
-        if absolute_increase_from_baseline >= self.LCD_PD_ABSOLUTE_THRESHOLD:
-            return ResponseType.PROGRESSION, f"iFLC absolute increase {absolute_increase_from_baseline:.1f} >= 100"
+        if change_from_nadir >= self.LCD_PD_ABSOLUTE_THRESHOLD:
+            return ResponseType.PROGRESSION, f"iFLC absolute increase {change_from_nadir:.1f} >= 100 from nadir"
 
-        # Check for VGPR: iFLC >= 90% decrease OR iFLC < 100
+        # Check for VGPR: iFLC >= 90% decrease from baseline OR iFLC < 100
         if percent_change >= self.LCD_VGPR_THRESHOLD:
             return ResponseType.VGPR, f"iFLC decreased {percent_change:.1f}% from baseline"
         if current_flc < self.LCD_VGPR_ABSOLUTE_THRESHOLD:
             return ResponseType.VGPR, f"iFLC ({current_flc:.1f}) < 100"
 
-        # Check for PR: iFLC >= 50% decrease
+        # Check for PR: iFLC >= 50% decrease from baseline
         if percent_change >= self.LCD_PR_THRESHOLD:
             return ResponseType.PR, f"iFLC decreased {percent_change:.1f}% from baseline"
 

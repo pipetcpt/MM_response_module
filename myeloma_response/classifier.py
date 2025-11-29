@@ -50,7 +50,7 @@ class PatientClassifier:
     1. If SPEP (M-protein) >= 0.5 g/dL:
        - Kappa > Lambda → IgG_Kappa
        - Lambda >= Kappa → IgG_Lambda
-    2. If SPEP < 0.5 g/dL and |Kappa - Lambda| >= 100:
+    2. If SPEP < 0.5 g/dL and |Kappa - Lambda| > 100:
        - Kappa > Lambda → LCD_Kappa
        - Lambda > Kappa → LCD_Lambda
     3. Otherwise → Unclassified
@@ -105,16 +105,16 @@ class PatientClassifier:
                     classification_reason=f"SPEP ({spep:.2f}) >= {self.SPEP_THRESHOLD}, Lambda ({lambda_:.2f}) >= Kappa ({kappa:.2f})"
                 )
 
-        # LCD type classification (SPEP < 0.5 and FLC difference >= 100)
+        # LCD type classification (SPEP < 0.5 and FLC difference > 100)
         flc_diff = abs(kappa - lambda_)
-        if flc_diff >= self.FLC_DIFFERENCE_THRESHOLD:
+        if flc_diff > self.FLC_DIFFERENCE_THRESHOLD:
             if kappa > lambda_:
                 return ClassificationResult(
                     patient_type=PatientType.LCD_KAPPA,
                     baseline_spep=spep,
                     baseline_kappa=kappa,
                     baseline_lambda=lambda_,
-                    classification_reason=f"SPEP ({spep:.2f}) < {self.SPEP_THRESHOLD}, |Kappa - Lambda| ({flc_diff:.2f}) >= {self.FLC_DIFFERENCE_THRESHOLD}, Kappa dominant"
+                    classification_reason=f"SPEP ({spep:.2f}) < {self.SPEP_THRESHOLD}, |Kappa - Lambda| ({flc_diff:.2f}) > {self.FLC_DIFFERENCE_THRESHOLD}, Kappa dominant"
                 )
             else:
                 return ClassificationResult(
@@ -122,7 +122,7 @@ class PatientClassifier:
                     baseline_spep=spep,
                     baseline_kappa=kappa,
                     baseline_lambda=lambda_,
-                    classification_reason=f"SPEP ({spep:.2f}) < {self.SPEP_THRESHOLD}, |Kappa - Lambda| ({flc_diff:.2f}) >= {self.FLC_DIFFERENCE_THRESHOLD}, Lambda dominant"
+                    classification_reason=f"SPEP ({spep:.2f}) < {self.SPEP_THRESHOLD}, |Kappa - Lambda| ({flc_diff:.2f}) > {self.FLC_DIFFERENCE_THRESHOLD}, Lambda dominant"
                 )
 
         # Unclassified
