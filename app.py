@@ -47,20 +47,44 @@ def evaluate_uploaded_file(uploaded_file):
 
 def create_results_dataframe(result):
     """Convert evaluation results to a pandas DataFrame."""
+    from myeloma_response.classifier import PatientType
+
+    is_lcd_type = result.patient_type.is_lcd_type()
+    is_igg_type = result.patient_type.is_igg_type()
+
     data = []
     for idx, tp in enumerate(result.timepoints):
-        data.append({
+        # Calculate FLC ratio
+        flc_ratio = None
+        if tp.kappa is not None and tp.lambda_ is not None and tp.lambda_ != 0:
+            flc_ratio = round(tp.kappa / tp.lambda_, 2)
+
+        row = {
             "Timepoint": idx + 1,
             "Date": tp.date.strftime("%Y-%m-%d") if tp.date else None,
             "SPEP": tp.spep,
             "Kappa": tp.kappa,
             "Lambda": tp.lambda_,
+            "FLC Ratio": flc_ratio,
             "UPEP": tp.upep,
-            "%Change": round(tp.percent_change_from_baseline, 1) if tp.percent_change_from_baseline is not None else None,
-            "Nadir": tp.nadir_value,
-            "Current Response": tp.current_response.value if tp.current_response else None,
-            "Confirmed Response": tp.confirmed_response.value if tp.confirmed_response else None,
-        })
+        }
+
+        # Add type-specific columns with clear labels
+        if is_lcd_type:
+            row["%Change (iFLC from BL)"] = round(tp.percent_change_from_baseline, 1) if tp.percent_change_from_baseline is not None else None
+            row["iFLC Nadir"] = tp.nadir_value
+        elif is_igg_type:
+            row["%Change (SPEP from BL)"] = round(tp.percent_change_from_baseline, 1) if tp.percent_change_from_baseline is not None else None
+            row["SPEP Nadir"] = tp.nadir_value
+        else:
+            row["%Change"] = round(tp.percent_change_from_baseline, 1) if tp.percent_change_from_baseline is not None else None
+            row["Nadir"] = tp.nadir_value
+
+        row["Current Response"] = tp.current_response.value if tp.current_response else None
+        row["Confirmed Response"] = tp.confirmed_response.value if tp.confirmed_response else None
+
+        data.append(row)
+
     return pd.DataFrame(data)
 
 
@@ -166,10 +190,17 @@ def main():
 
             with col2:
                 st.subheader("Baseline Values")
-                baseline_col1, baseline_col2, baseline_col3 = st.columns(3)
+                baseline_col1, baseline_col2, baseline_col3, baseline_col4 = st.columns(4)
                 baseline_col1.metric("SPEP", f"{result.baseline_spep:.2f}" if result.baseline_spep else "N/A")
                 baseline_col2.metric("Kappa", f"{result.baseline_kappa:.2f}" if result.baseline_kappa else "N/A")
                 baseline_col3.metric("Lambda", f"{result.baseline_lambda:.2f}" if result.baseline_lambda else "N/A")
+                # Show FLC ratio
+                if result.baseline_kappa and result.baseline_lambda and result.baseline_lambda != 0:
+                    flc_ratio = result.baseline_kappa / result.baseline_lambda
+                    ratio_status = "정상" if 0.26 <= flc_ratio <= 1.65 else "비정상"
+                    baseline_col4.metric("FLC Ratio", f"{flc_ratio:.2f}", ratio_status)
+                else:
+                    baseline_col4.metric("FLC Ratio", "N/A")
 
             # Response summary
             st.subheader("📈 Response Summary")
@@ -217,14 +248,32 @@ def main():
                         return "background-color: #D3D3D3"  # Light gray
                     return ""
 
+                def highlight_flc_ratio(val):
+                    """Highlight FLC ratio when in normal range (0.26~1.65)."""
+                    if val is not None and isinstance(val, (int, float)):
+                        if 0.26 <= val <= 1.65:
+                            return "background-color: #90EE90; font-weight: bold"  # Normal range - light green
+                        elif val < 0.26 or val > 1.65:
+                            return "background-color: #FFDAB9"  # Abnormal - peach
+                    return ""
+
                 styled_df = df.style.map(
                     highlight_response,
                     subset=["Current Response", "Confirmed Response"]
+                ).map(
+                    highlight_flc_ratio,
+                    subset=["FLC Ratio"]
                 )
                 st.dataframe(styled_df, use_container_width=True, height=400)
             except (ImportError, AttributeError):
                 # Fallback: show without styling if jinja2 is not installed
                 st.dataframe(df, use_container_width=True, height=400)
+
+            # Add caption explaining the columns
+            if result.patient_type.is_lcd_type():
+                st.caption("※ %Change (iFLC from BL): involved FLC의 Baseline 대비 변화율 | iFLC Nadir: involved FLC의 최저값 | FLC Ratio 정상범위: 0.26~1.65 (녹색)")
+            elif result.patient_type.is_igg_type():
+                st.caption("※ %Change (SPEP from BL): SPEP의 Baseline 대비 변화율 | SPEP Nadir: SPEP 최저값")
 
             # Statistics
             st.subheader("📊 Statistics")
