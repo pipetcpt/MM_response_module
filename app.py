@@ -93,6 +93,9 @@ def create_results_dataframe(result):
             confirmed_resp = f"{confirmed_resp}{lcd_warning}"
         row["Confirmed Response"] = confirmed_resp
 
+        # Add Notes column for combination info and other notes
+        row["Notes"] = tp.notes if tp.notes else None
+
         data.append(row)
 
     return pd.DataFrame(data)
@@ -272,12 +275,26 @@ def main():
                             return "background-color: #FFDAB9"  # Abnormal - peach
                     return ""
 
+                def highlight_notes(val):
+                    """Highlight notes for combined rows and combination info."""
+                    if val is None:
+                        return ""
+                    val_str = str(val)
+                    if "결합 평가됨" in val_str:
+                        return "background-color: #E0E0E0; font-style: italic"  # Gray italic for combined
+                    elif "[결합:" in val_str:
+                        return "background-color: #E6F3FF"  # Light blue for combination info
+                    return ""
+
                 styled_df = df.style.map(
                     highlight_response,
                     subset=["Current Response", "Confirmed Response"]
                 ).map(
                     highlight_flc_ratio,
                     subset=["FLC Ratio"]
+                ).map(
+                    highlight_notes,
+                    subset=["Notes"]
                 )
                 st.dataframe(styled_df, use_container_width=True, height=400)
             except (ImportError, AttributeError):
@@ -289,6 +306,7 @@ def main():
                 st.caption("※ %Change (iFLC from BL): involved FLC의 Baseline 대비 변화율 | iFLC Nadir: involved FLC의 최저값 | FLC Ratio 정상범위: 0.26~1.65 (녹색)")
             elif result.patient_type.is_igg_type():
                 st.caption("※ %Change (SPEP from BL): SPEP의 Baseline 대비 변화율 | SPEP Nadir: SPEP 최저값")
+            st.caption("※ 3일 이내 측정된 값은 자동으로 결합되어 평가됩니다. [결합: ...]은 다른 날짜에서 가져온 값을 표시합니다.")
 
             # Statistics
             st.subheader("📊 Statistics")
