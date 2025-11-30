@@ -80,8 +80,18 @@ def create_results_dataframe(result):
             row["%Change"] = round(tp.percent_change_from_baseline, 1) if tp.percent_change_from_baseline is not None else None
             row["Nadir"] = tp.nadir_value
 
-        row["Current Response"] = tp.current_response.value if tp.current_response else None
-        row["Confirmed Response"] = tp.confirmed_response.value if tp.confirmed_response else None
+        # Add LCD warning to response display if present in notes
+        lcd_warning = " (LCD Type 변경 확인!)" if tp.notes and "(LCD Type 변경 확인!)" in tp.notes else ""
+
+        current_resp = tp.current_response.value if tp.current_response else None
+        if current_resp and lcd_warning:
+            current_resp = f"{current_resp}{lcd_warning}"
+        row["Current Response"] = current_resp
+
+        confirmed_resp = tp.confirmed_response.value if tp.confirmed_response else None
+        if confirmed_resp and lcd_warning:
+            confirmed_resp = f"{confirmed_resp}{lcd_warning}"
+        row["Confirmed Response"] = confirmed_resp
 
         data.append(row)
 
@@ -233,21 +243,23 @@ def main():
             # Try to style the dataframe (requires jinja2)
             try:
                 def highlight_response(val):
-                    if val == "bCR":
-                        return "background-color: #90EE90"  # Light green
-                    elif val == "VGPR":
-                        return "background-color: #98FB98"  # Pale green
-                    elif val == "PR":
-                        return "background-color: #FFFFE0"  # Light yellow
-                    elif val == "MR":
-                        return "background-color: #FAFAD2"  # Light goldenrod
-                    elif val == "Progression":
-                        return "background-color: #FFB6C1"  # Light pink
-                    elif val == "Progression (Type 변경 가능!)":
-                        return "background-color: #FFA500"  # Orange - type change warning
-                    elif val == "LCD Type 변경 확인 필요!":
+                    if val is None:
+                        return ""
+                    val_str = str(val)
+                    # Check for LCD Type warning (gold background takes priority)
+                    if "(LCD Type 변경 확인!)" in val_str:
                         return "background-color: #FFD700"  # Gold - LCD type check warning
-                    elif val == "NE":
+                    elif val_str.startswith("bCR"):
+                        return "background-color: #90EE90"  # Light green
+                    elif val_str.startswith("VGPR"):
+                        return "background-color: #98FB98"  # Pale green
+                    elif val_str.startswith("PR"):
+                        return "background-color: #FFFFE0"  # Light yellow
+                    elif val_str.startswith("MR"):
+                        return "background-color: #FAFAD2"  # Light goldenrod
+                    elif val_str.startswith("Progression"):
+                        return "background-color: #FFB6C1"  # Light pink
+                    elif val_str == "NE":
                         return "background-color: #D3D3D3"  # Light gray
                     return ""
 
