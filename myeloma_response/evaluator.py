@@ -14,13 +14,14 @@ from .parser import LabData
 
 class ResponseType(Enum):
     """Treatment response categories for multiple myeloma."""
-    CR = "CR"  # Complete Response
+    CR = "bCR"  # Biochemical Complete Response
     VGPR = "VGPR"  # Very Good Partial Response
     PR = "PR"  # Partial Response
     MR = "MR"  # Minor Response
     SD = "SD"  # Stable Disease
     PROGRESSION = "Progression"
     PROGRESSION_TYPE_CHANGE = "Progression (Type 변경 가능!)"  # Progression with possible type change
+    LCD_TYPE_CHECK = "LCD Type 변경 확인 필요!"  # FLC difference > 100 in IgG patient
     NOT_EVALUABLE = "NE"  # Not Evaluable
 
     def __str__(self):
@@ -57,19 +58,20 @@ class EvaluationResult:
 class ResponseEvaluator:
     """
     Evaluator for multiple myeloma treatment response.
+    (Modified IMWG criteria for real-world data)
 
     For IgG type patients (SPEP >= 0.5):
     - Response is based on M-protein (SPEP) reduction from baseline
-    - MR: >= 15% reduction
-    - PR: >= 45% reduction
-    - VGPR: >= 85% reduction
-    - CR: SPEP = 0
-    - Progression: increase > 0.45 g/dL from nadir
-    - Progression (Type Change): After CR, if |Kappa-Lambda| > 100
+    - MR: >= 25% reduction
+    - PR: >= 50% reduction
+    - VGPR: >= 90% reduction
+    - bCR: SPEP = 0 (biochemical Complete Response)
+    - PD: >= 25% increase from nadir AND >= 0.5 g/dL absolute increase
+    - LCD Type Check: If |Kappa-Lambda| > 100 at any time → "LCD Type 변경 확인 필요!"
 
     For LCD type patients (SPEP < 0.5, |Kappa-Lambda| > 100):
     - Progression (Type Change): SPEP >= 0.5 (possible change to IgG type)
-    - CR: FLC ratio (Kappa/Lambda) in normal range (0.26~1.65)
+    - bCR: FLC ratio (Kappa/Lambda) in normal range (0.26~1.65)
     - VGPR: iFLC >= 90% decrease from baseline OR iFLC < 100
     - PR: iFLC >= 50% decrease from baseline
     - PD: iFLC >= 25% increase from nadir AND absolute increase >= 100 from nadir
@@ -79,12 +81,13 @@ class ResponseEvaluator:
     """
 
     # IgG Response thresholds (percentage reduction from baseline)
-    MR_THRESHOLD = 15.0
-    PR_THRESHOLD = 45.0
-    VGPR_THRESHOLD = 85.0
+    MR_THRESHOLD = 25.0
+    PR_THRESHOLD = 50.0
+    VGPR_THRESHOLD = 90.0
 
-    # IgG Progression threshold (absolute increase from nadir in g/dL)
-    PROGRESSION_THRESHOLD = 0.45
+    # IgG Progression thresholds (both must be met)
+    IGG_PD_PERCENT_THRESHOLD = 25.0  # >= 25% increase from nadir
+    IGG_PD_ABSOLUTE_THRESHOLD = 0.5  # >= 0.5 g/dL absolute increase from nadir
 
     # LCD Response thresholds
     LCD_VGPR_THRESHOLD = 90.0  # 90% decrease
@@ -208,23 +211,18 @@ class ResponseEvaluator:
 
             # Calculate change from nadir
             change_from_nadir = spep - nadir
+            percent_increase_from_nadir = ((spep - nadir) / nadir * 100) if nadir > 0 else 0
 
             # Determine current response
-            current_response = self._determine_igg_response(
-                spep, percent_change, change_from_nadir
+            current_response, response_notes = self._determine_igg_response(
+                spep, percent_change, change_from_nadir, percent_increase_from_nadir, kappa, lambda_
             )
 
-            # Track if CR was achieved
+            # Track if bCR was achieved
             if current_response == ResponseType.CR:
                 cr_achieved = True
 
-            # Check for type change possibility after CR
-            # If CR was achieved but now |Kappa - Lambda| > 100, it could be LCD progression
-            notes = ""
-            if cr_achieved and change_from_nadir <= self.PROGRESSION_THRESHOLD:
-                if self._check_type_change_possible(kappa, lambda_):
-                    current_response = ResponseType.PROGRESSION_TYPE_CHANGE
-                    notes = "FLC difference > 100, possible LCD type progression"
+            notes = response_notes
 
             # Update nadir if current value is lower
             if spep < nadir:
@@ -232,12 +230,17 @@ class ResponseEvaluator:
 
             # Determine confirmed response
             if not progression_confirmed:
-                if current_response in (ResponseType.PROGRESSION, ResponseType.PROGRESSION_TYPE_CHANGE):
-                    # Check if progression is confirmed (2 consecutive)
-                    if previous_responses and previous_responses[-1] in (ResponseType.PROGRESSION, ResponseType.PROGRESSION_TYPE_CHANGE):
+                if current_response in (ResponseType.PROGRESSION, ResponseType.PROGRESSION_TYPE_CHANGE, ResponseType.LCD_TYPE_CHECK):
+                    # Check if progression/type change is confirmed (2 consecutive)
+                    if previous_responses and previous_responses[-1] in (ResponseType.PROGRESSION, ResponseType.PROGRESSION_TYPE_CHANGE, ResponseType.LCD_TYPE_CHECK):
                         confirmed_response = current_response
                         progression_confirmed = True
-                        notes = "Progression confirmed" if current_response == ResponseType.PROGRESSION else "Progression confirmed (Type 변경 가능!)"
+                        if current_response == ResponseType.PROGRESSION:
+                            notes = "Progression confirmed"
+                        elif current_response == ResponseType.LCD_TYPE_CHECK:
+                            notes = "LCD Type 변경 확인 필요 (confirmed)"
+                        else:
+                            notes = "Progression confirmed (Type 변경 가능!)"
                 elif current_response in (ResponseType.CR, ResponseType.VGPR, ResponseType.PR, ResponseType.MR):
                     # Check if response is confirmed (2 consecutive)
                     if previous_responses and previous_responses[-1] == current_response:
@@ -274,26 +277,51 @@ class ResponseEvaluator:
         self,
         spep: float,
         percent_change: float,
-        change_from_nadir: float
-    ) -> ResponseType:
-        """Determine response type for IgG patients based on SPEP value."""
-        # Check for CR first
-        if spep == 0:
-            return ResponseType.CR
+        change_from_nadir: float,
+        percent_increase_from_nadir: float,
+        kappa: Optional[float] = None,
+        lambda_: Optional[float] = None
+    ) -> tuple[ResponseType, str]:
+        """
+        Determine response type for IgG patients based on SPEP value.
 
-        # Check for Progression (increase > 0.45 from nadir)
-        if change_from_nadir > self.PROGRESSION_THRESHOLD:
-            return ResponseType.PROGRESSION
+        Returns:
+            Tuple of (ResponseType, notes string)
+        """
+        # Check for bCR first
+        if spep == 0:
+            # Even in bCR, check if FLC difference > 100 (possible LCD type)
+            if self._check_type_change_possible(kappa, lambda_):
+                return ResponseType.LCD_TYPE_CHECK, f"|Kappa-Lambda| > 100, LCD type 확인 필요"
+            return ResponseType.CR, ""
+
+        # Check for Progression (>= 25% increase AND >= 0.5 g/dL absolute from nadir)
+        has_percent_increase = percent_increase_from_nadir >= self.IGG_PD_PERCENT_THRESHOLD
+        has_absolute_increase = change_from_nadir >= self.IGG_PD_ABSOLUTE_THRESHOLD
+
+        if has_percent_increase and has_absolute_increase:
+            # Also check for LCD type change possibility
+            if self._check_type_change_possible(kappa, lambda_):
+                return ResponseType.PROGRESSION_TYPE_CHANGE, f"SPEP {percent_increase_from_nadir:.1f}% 증가 (절대 증가 {change_from_nadir:.2f}), |Kappa-Lambda| > 100"
+            return ResponseType.PROGRESSION, f"SPEP {percent_increase_from_nadir:.1f}% 증가 from nadir (절대 증가 {change_from_nadir:.2f})"
+
+        # Check for LCD type change regardless of other response (if |Kappa-Lambda| > 100)
+        if self._check_type_change_possible(kappa, lambda_):
+            return ResponseType.LCD_TYPE_CHECK, f"|Kappa-Lambda| > 100, LCD type 확인 필요"
 
         # Check response depth based on percent change from baseline
         if percent_change >= self.VGPR_THRESHOLD:
-            return ResponseType.VGPR
+            return ResponseType.VGPR, f"SPEP {percent_change:.1f}% 감소 from baseline"
         elif percent_change >= self.PR_THRESHOLD:
-            return ResponseType.PR
+            return ResponseType.PR, f"SPEP {percent_change:.1f}% 감소 from baseline"
         elif percent_change >= self.MR_THRESHOLD:
-            return ResponseType.MR
-        else:
-            return ResponseType.SD
+            return ResponseType.MR, f"SPEP {percent_change:.1f}% 감소 from baseline"
+
+        # Check if only percent increase condition is met (need to check other symptoms)
+        if has_percent_increase and not has_absolute_increase:
+            return ResponseType.SD, f"SPEP {percent_increase_from_nadir:.1f}% 증가 (다른 증상 확인 필요!)"
+
+        return ResponseType.SD, ""
 
     def _is_better_response(self, response1: ResponseType, response2: ResponseType) -> bool:
         """Check if response1 is better than response2."""

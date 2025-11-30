@@ -156,8 +156,9 @@ def main():
     st.title("🔬 Multiple Myeloma Response Evaluator")
     st.markdown("""
     다발골수종 치료 반응 평가 도구입니다. Excel 파일을 업로드하면 SPEP, Kappa, Lambda 값을 분석하여
-    치료 반응(CR, VGPR, PR, MR, Progression)을 평가합니다.
+    치료 반응(bCR, VGPR, PR, MR, Progression)을 평가합니다.
     """)
+    st.caption("※ Modified IMWG criteria for real-world data")
 
     # File upload
     st.sidebar.header("📁 파일 업로드")
@@ -215,9 +216,9 @@ def main():
 
             with resp_col2:
                 if summary["cr_date"]:
-                    st.metric("CR Achieved", summary["cr_date"].strftime("%Y-%m-%d"))
+                    st.metric("bCR Achieved", summary["cr_date"].strftime("%Y-%m-%d"))
                 else:
-                    st.metric("CR Achieved", "Not achieved")
+                    st.metric("bCR Achieved", "Not achieved")
 
             with resp_col3:
                 if summary["progression_date"]:
@@ -232,7 +233,7 @@ def main():
             # Try to style the dataframe (requires jinja2)
             try:
                 def highlight_response(val):
-                    if val == "CR":
+                    if val == "bCR":
                         return "background-color: #90EE90"  # Light green
                     elif val == "VGPR":
                         return "background-color: #98FB98"  # Pale green
@@ -244,6 +245,8 @@ def main():
                         return "background-color: #FFB6C1"  # Light pink
                     elif val == "Progression (Type 변경 가능!)":
                         return "background-color: #FFA500"  # Orange - type change warning
+                    elif val == "LCD Type 변경 확인 필요!":
+                        return "background-color: #FFD700"  # Gold - LCD type check warning
                     elif val == "NE":
                         return "background-color: #D3D3D3"  # Light gray
                     return ""
@@ -284,7 +287,7 @@ def main():
 
             stat_col1.metric("Total Timepoints", total_timepoints)
             stat_col2.metric("Evaluable", evaluable)
-            stat_col3.metric("CR Count", sum(1 for tp in result.timepoints if tp.confirmed_response == ResponseType.CR))
+            stat_col3.metric("bCR Count", sum(1 for tp in result.timepoints if tp.confirmed_response == ResponseType.CR))
             stat_col4.metric("Progression Count", sum(1 for tp in result.timepoints if tp.confirmed_response == ResponseType.PROGRESSION))
 
             # Download button
@@ -345,13 +348,14 @@ def main():
             st.markdown("""
             | 반응 | 기준 |
             |:----:|:-----|
-            | **MR** | Baseline 대비 ≥15% 감소 |
-            | **PR** | Baseline 대비 ≥45% 감소 |
-            | **VGPR** | Baseline 대비 ≥85% 감소 |
-            | **CR** | SPEP = 0 |
-            | **Progression** | Nadir 대비 >0.45 g/dL 상승 |
-            | **Progression (Type 변경!)** | CR 이후 \|Kappa-Lambda\| > 100 |
+            | **MR** | Baseline 대비 ≥25% 감소 |
+            | **PR** | Baseline 대비 ≥50% 감소 |
+            | **VGPR** | Baseline 대비 ≥90% 감소 |
+            | **bCR** | SPEP = 0 (biochemical CR) |
+            | **PD** | Nadir 대비 ≥25% 증가 **AND** 절대 증가 ≥0.5 g/dL |
+            | **LCD Type 변경 확인!** | \|Kappa-Lambda\| > 100 발견 시 |
             """)
+            st.caption("※ SPEP 25% 증가만 충족 시 → SD (다른 증상 확인 필요!)")
 
         with col2:
             st.markdown("#### LCD 타입 반응 평가")
@@ -359,7 +363,7 @@ def main():
             | 반응 | 기준 |
             |:----:|:-----|
             | **Progression (Type 변경!)** | SPEP ≥ 0.5 (IgG 타입 변경 가능성) |
-            | **CR** | FLC ratio 정상화 (0.26~1.65) |
+            | **bCR** | FLC ratio 정상화 (0.26~1.65) |
             | **VGPR** | Baseline 대비 iFLC ≥90% 감소 또는 iFLC < 100 |
             | **PR** | Baseline 대비 iFLC ≥50% 감소 |
             | **PD** | Nadir 대비 iFLC ≥25% 증가 **AND** 절대 증가 ≥100 |
