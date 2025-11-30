@@ -241,19 +241,13 @@ class ResponseEvaluator:
                             notes = "LCD Type 변경 확인 필요 (confirmed)"
                         else:
                             notes = "Progression confirmed (Type 변경 가능!)"
-                elif current_response in (ResponseType.CR, ResponseType.VGPR, ResponseType.PR, ResponseType.MR):
+                elif current_response in (ResponseType.CR, ResponseType.VGPR, ResponseType.PR, ResponseType.MR, ResponseType.SD):
                     # Check if response is confirmed (2 consecutive)
                     if previous_responses and previous_responses[-1] == current_response:
-                        confirmed_response = current_response
-                        notes = f"{current_response.value} confirmed"
-                    elif (previous_responses and
-                          confirmed_response is not None and
-                          current_response != confirmed_response):
-                        # Check if new response should override confirmed
-                        if self._is_better_response(current_response, confirmed_response):
-                            if previous_responses[-1] == current_response:
-                                confirmed_response = current_response
-                                notes = f"{current_response.value} confirmed (upgraded)"
+                        # First time confirmation or upgrade to better response
+                        if confirmed_response is None or self._is_better_response(current_response, confirmed_response) or current_response == confirmed_response:
+                            confirmed_response = current_response
+                            notes = f"{current_response.value} confirmed"
 
             timepoints.append(TimePointResult(
                 date=lab_data.dates[i],
@@ -265,7 +259,7 @@ class ResponseEvaluator:
                 change_from_nadir=change_from_nadir,
                 nadir_value=nadir,
                 current_response=current_response,
-                confirmed_response=confirmed_response if not (progression_confirmed and current_response not in (ResponseType.PROGRESSION, ResponseType.PROGRESSION_TYPE_CHANGE)) else (confirmed_response if progression_confirmed else None),
+                confirmed_response=confirmed_response,
                 notes=notes
             ))
 
@@ -430,10 +424,12 @@ class ResponseEvaluator:
                         confirmed_response = current_response
                         progression_confirmed = True
                         notes = "Progression confirmed" if current_response == ResponseType.PROGRESSION else "Progression confirmed (Type 변경 가능!)"
-                elif current_response in (ResponseType.CR, ResponseType.VGPR, ResponseType.PR, ResponseType.MR):
+                elif current_response in (ResponseType.CR, ResponseType.VGPR, ResponseType.PR, ResponseType.MR, ResponseType.SD):
                     if previous_responses and previous_responses[-1] == current_response:
-                        confirmed_response = current_response
-                        notes = f"{current_response.value} confirmed"
+                        # First time confirmation or upgrade to better response
+                        if confirmed_response is None or self._is_better_response(current_response, confirmed_response) or current_response == confirmed_response:
+                            confirmed_response = current_response
+                            notes = f"{current_response.value} confirmed"
 
             timepoints.append(TimePointResult(
                 date=lab_data.dates[i],
