@@ -273,8 +273,6 @@ class ResponseEvaluator:
         nadir = baseline
         previous_responses: list[ResponseType] = []
         confirmed_response: Optional[ResponseType] = None
-        progression_confirmed = False
-        cr_achieved = False  # Track if CR was ever achieved
         combined_indices: set[int] = set()  # Track indices used in combinations
 
         for i in range(len(lab_data)):
@@ -295,7 +293,7 @@ class ResponseEvaluator:
                     change_from_nadir=None,
                     nadir_value=nadir,
                     current_response=None,
-                    confirmed_response=confirmed_response if not progression_confirmed else None,
+                    confirmed_response=confirmed_response,
                     notes="→ 다음 행에서 결합 평가됨"
                 ))
                 continue
@@ -338,7 +336,7 @@ class ResponseEvaluator:
                     change_from_nadir=None,
                     nadir_value=nadir,
                     current_response=ResponseType.NOT_EVALUABLE,
-                    confirmed_response=confirmed_response if not progression_confirmed else None,
+                    confirmed_response=confirmed_response,
                     notes="Missing SPEP value"
                 ))
                 continue
@@ -368,27 +366,15 @@ class ResponseEvaluator:
             if spep < nadir:
                 nadir = spep
 
-            # Determine confirmed response
-            if not progression_confirmed:
-                if current_response in (ResponseType.PROGRESSION, ResponseType.PROGRESSION_TYPE_CHANGE):
-                    # Check if progression is confirmed (2 consecutive)
-                    if previous_responses and previous_responses[-1] in (ResponseType.PROGRESSION, ResponseType.PROGRESSION_TYPE_CHANGE):
-                        confirmed_response = current_response
-                        progression_confirmed = True
-                        notes = "Progression confirmed"
-                        if combination_note:
-                            notes = f"{combination_note} {notes}"
-                elif current_response in (ResponseType.CR, ResponseType.VGPR, ResponseType.PR, ResponseType.MR, ResponseType.SD):
-                    # Check if response is confirmed (2 consecutive)
-                    if previous_responses and previous_responses[-1] == current_response:
-                        # First time confirmation or upgrade to better response
-                        if confirmed_response is None or self._is_better_response(current_response, confirmed_response) or current_response == confirmed_response:
-                            confirmed_response = current_response
-                            # Preserve LCD warning if present
-                            lcd_warn = " (LCD Type 변경 확인!)" if "(LCD Type 변경 확인!)" in response_notes else ""
-                            notes = f"{current_response.value} confirmed{lcd_warn}"
-                            if combination_note:
-                                notes = f"{combination_note} {notes}"
+            # Determine confirmed response - update when 2 consecutive same responses occur
+            if previous_responses and previous_responses[-1] == current_response:
+                # 2 consecutive same responses -> confirm this response
+                confirmed_response = current_response
+                # Preserve LCD warning if present
+                lcd_warn = " (LCD Type 변경 확인!)" if "(LCD Type 변경 확인!)" in response_notes else ""
+                notes = f"{current_response.value} confirmed{lcd_warn}"
+                if combination_note:
+                    notes = f"{combination_note} {notes}"
 
             timepoints.append(TimePointResult(
                 date=lab_data.dates[i],
@@ -508,7 +494,6 @@ class ResponseEvaluator:
         nadir = baseline_flc
         previous_responses: list[ResponseType] = []
         confirmed_response: Optional[ResponseType] = None
-        progression_confirmed = False
         combined_indices: set[int] = set()  # Track indices used in combinations
 
         for i in range(len(lab_data)):
@@ -529,7 +514,7 @@ class ResponseEvaluator:
                     change_from_nadir=None,
                     nadir_value=nadir,
                     current_response=None,
-                    confirmed_response=confirmed_response if not progression_confirmed else None,
+                    confirmed_response=confirmed_response,
                     notes="→ 다음 행에서 결합 평가됨"
                 ))
                 continue
@@ -574,7 +559,7 @@ class ResponseEvaluator:
                     change_from_nadir=None,
                     nadir_value=nadir,
                     current_response=ResponseType.NOT_EVALUABLE,
-                    confirmed_response=confirmed_response if not progression_confirmed else None,
+                    confirmed_response=confirmed_response,
                     notes="Missing FLC value"
                 ))
                 continue
@@ -601,23 +586,13 @@ class ResponseEvaluator:
             if current_flc < nadir:
                 nadir = current_flc
 
-            # Confirmation logic (same as IgG)
-            if not progression_confirmed:
-                if current_response in (ResponseType.PROGRESSION, ResponseType.PROGRESSION_TYPE_CHANGE):
-                    if previous_responses and previous_responses[-1] in (ResponseType.PROGRESSION, ResponseType.PROGRESSION_TYPE_CHANGE):
-                        confirmed_response = current_response
-                        progression_confirmed = True
-                        notes = "Progression confirmed" if current_response == ResponseType.PROGRESSION else "Progression confirmed (Type 변경 가능!)"
-                        if combination_note:
-                            notes = f"{combination_note} {notes}"
-                elif current_response in (ResponseType.CR, ResponseType.VGPR, ResponseType.PR, ResponseType.MR, ResponseType.SD):
-                    if previous_responses and previous_responses[-1] == current_response:
-                        # First time confirmation or upgrade to better response
-                        if confirmed_response is None or self._is_better_response(current_response, confirmed_response) or current_response == confirmed_response:
-                            confirmed_response = current_response
-                            notes = f"{current_response.value} confirmed"
-                            if combination_note:
-                                notes = f"{combination_note} {notes}"
+            # Determine confirmed response - update when 2 consecutive same responses occur
+            if previous_responses and previous_responses[-1] == current_response:
+                # 2 consecutive same responses -> confirm this response
+                confirmed_response = current_response
+                notes = f"{current_response.value} confirmed"
+                if combination_note:
+                    notes = f"{combination_note} {notes}"
 
             timepoints.append(TimePointResult(
                 date=lab_data.dates[i],
