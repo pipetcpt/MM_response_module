@@ -12,7 +12,7 @@ from io import BytesIO
 
 # Import our modules
 from myeloma_response.parser import ExcelParser
-from myeloma_response.classifier import PatientClassifier
+from myeloma_response.classifier import PatientClassifier, PatientType
 from myeloma_response.evaluator import ResponseEvaluator, ResponseType
 
 
@@ -300,12 +300,48 @@ def main():
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
 
-            # Response chart
-            st.subheader("📈 SPEP Trend")
-            chart_df = df[df["SPEP"].notna()][["Date", "SPEP"]].copy()
-            if not chart_df.empty:
-                chart_df["Date"] = pd.to_datetime(chart_df["Date"])
-                st.line_chart(chart_df.set_index("Date")["SPEP"])
+            # Response chart - different based on patient type
+            if result.patient_type.is_igg_type():
+                st.subheader("📈 SPEP Trend")
+                chart_df = df[df["SPEP"].notna()][["Date", "SPEP"]].copy()
+                if not chart_df.empty:
+                    chart_df["Date"] = pd.to_datetime(chart_df["Date"])
+                    st.line_chart(chart_df.set_index("Date")["SPEP"])
+
+            elif result.patient_type.is_lcd_type():
+                st.subheader("📈 FLC Trends")
+
+                # Determine which is iFLC based on patient type
+                is_kappa = result.patient_type == PatientType.LCD_KAPPA
+                iflc_col = "Kappa" if is_kappa else "Lambda"
+                iflc_label = "iFLC (Kappa)" if is_kappa else "iFLC (Lambda)"
+
+                col_chart1, col_chart2 = st.columns(2)
+
+                with col_chart1:
+                    st.markdown(f"**{iflc_label} Trend**")
+                    iflc_df = df[df[iflc_col].notna()][["Date", iflc_col]].copy()
+                    if not iflc_df.empty:
+                        iflc_df["Date"] = pd.to_datetime(iflc_df["Date"])
+                        iflc_df = iflc_df.rename(columns={iflc_col: iflc_label})
+                        st.line_chart(iflc_df.set_index("Date")[iflc_label])
+
+                with col_chart2:
+                    st.markdown("**FLC Ratio Trend**")
+                    ratio_df = df[df["FLC Ratio"].notna()][["Date", "FLC Ratio"]].copy()
+                    if not ratio_df.empty:
+                        ratio_df["Date"] = pd.to_datetime(ratio_df["Date"])
+                        st.line_chart(ratio_df.set_index("Date")["FLC Ratio"])
+                        st.caption("정상 범위: 0.26 ~ 1.65")
+
+            else:
+                # Unclassified - show all trends
+                st.subheader("📈 Lab Value Trends")
+                chart_df = df[["Date", "SPEP", "Kappa", "Lambda"]].copy()
+                chart_df = chart_df.dropna(subset=["Date"])
+                if not chart_df.empty:
+                    chart_df["Date"] = pd.to_datetime(chart_df["Date"])
+                    st.line_chart(chart_df.set_index("Date"))
 
     else:
         # Show instructions when no file is uploaded
