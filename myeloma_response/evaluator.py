@@ -230,24 +230,21 @@ class ResponseEvaluator:
 
             # Determine confirmed response
             if not progression_confirmed:
-                if current_response in (ResponseType.PROGRESSION, ResponseType.PROGRESSION_TYPE_CHANGE, ResponseType.LCD_TYPE_CHECK):
-                    # Check if progression/type change is confirmed (2 consecutive)
-                    if previous_responses and previous_responses[-1] in (ResponseType.PROGRESSION, ResponseType.PROGRESSION_TYPE_CHANGE, ResponseType.LCD_TYPE_CHECK):
+                if current_response in (ResponseType.PROGRESSION, ResponseType.PROGRESSION_TYPE_CHANGE):
+                    # Check if progression is confirmed (2 consecutive)
+                    if previous_responses and previous_responses[-1] in (ResponseType.PROGRESSION, ResponseType.PROGRESSION_TYPE_CHANGE):
                         confirmed_response = current_response
                         progression_confirmed = True
-                        if current_response == ResponseType.PROGRESSION:
-                            notes = "Progression confirmed"
-                        elif current_response == ResponseType.LCD_TYPE_CHECK:
-                            notes = "LCD Type 변경 확인 필요 (confirmed)"
-                        else:
-                            notes = "Progression confirmed (Type 변경 가능!)"
+                        notes = "Progression confirmed"
                 elif current_response in (ResponseType.CR, ResponseType.VGPR, ResponseType.PR, ResponseType.MR, ResponseType.SD):
                     # Check if response is confirmed (2 consecutive)
                     if previous_responses and previous_responses[-1] == current_response:
                         # First time confirmation or upgrade to better response
                         if confirmed_response is None or self._is_better_response(current_response, confirmed_response) or current_response == confirmed_response:
                             confirmed_response = current_response
-                            notes = f"{current_response.value} confirmed"
+                            # Preserve LCD warning if present
+                            lcd_warn = " (LCD Type 변경 확인!)" if "(LCD Type 변경 확인!)" in response_notes else ""
+                            notes = f"{current_response.value} confirmed{lcd_warn}"
 
             timepoints.append(TimePointResult(
                 date=lab_data.dates[i],
@@ -282,40 +279,35 @@ class ResponseEvaluator:
         Returns:
             Tuple of (ResponseType, notes string)
         """
+        # Check if LCD type change warning is needed
+        lcd_warning = ""
+        if self._check_type_change_possible(kappa, lambda_):
+            lcd_warning = " (LCD Type 변경 확인!)"
+
         # Check for bCR first
         if spep == 0:
-            # Even in bCR, check if FLC difference > 100 (possible LCD type)
-            if self._check_type_change_possible(kappa, lambda_):
-                return ResponseType.LCD_TYPE_CHECK, f"|Kappa-Lambda| > 100, LCD type 확인 필요"
-            return ResponseType.CR, ""
+            return ResponseType.CR, f"SPEP = 0{lcd_warning}"
 
         # Check for Progression (>= 25% increase AND >= 0.5 g/dL absolute from nadir)
         has_percent_increase = percent_increase_from_nadir >= self.IGG_PD_PERCENT_THRESHOLD
         has_absolute_increase = change_from_nadir >= self.IGG_PD_ABSOLUTE_THRESHOLD
 
         if has_percent_increase and has_absolute_increase:
-            # Also check for LCD type change possibility
-            if self._check_type_change_possible(kappa, lambda_):
-                return ResponseType.PROGRESSION_TYPE_CHANGE, f"SPEP {percent_increase_from_nadir:.1f}% 증가 (절대 증가 {change_from_nadir:.2f}), |Kappa-Lambda| > 100"
-            return ResponseType.PROGRESSION, f"SPEP {percent_increase_from_nadir:.1f}% 증가 from nadir (절대 증가 {change_from_nadir:.2f})"
-
-        # Check for LCD type change regardless of other response (if |Kappa-Lambda| > 100)
-        if self._check_type_change_possible(kappa, lambda_):
-            return ResponseType.LCD_TYPE_CHECK, f"|Kappa-Lambda| > 100, LCD type 확인 필요"
+            return ResponseType.PROGRESSION, f"SPEP {percent_increase_from_nadir:.1f}% 증가 from nadir (절대 증가 {change_from_nadir:.2f}){lcd_warning}"
 
         # Check response depth based on percent change from baseline
         if percent_change >= self.VGPR_THRESHOLD:
-            return ResponseType.VGPR, f"SPEP {percent_change:.1f}% 감소 from baseline"
+            return ResponseType.VGPR, f"SPEP {percent_change:.1f}% 감소 from baseline{lcd_warning}"
         elif percent_change >= self.PR_THRESHOLD:
-            return ResponseType.PR, f"SPEP {percent_change:.1f}% 감소 from baseline"
+            return ResponseType.PR, f"SPEP {percent_change:.1f}% 감소 from baseline{lcd_warning}"
         elif percent_change >= self.MR_THRESHOLD:
-            return ResponseType.MR, f"SPEP {percent_change:.1f}% 감소 from baseline"
+            return ResponseType.MR, f"SPEP {percent_change:.1f}% 감소 from baseline{lcd_warning}"
 
         # Check if only percent increase condition is met (need to check other symptoms)
         if has_percent_increase and not has_absolute_increase:
-            return ResponseType.SD, f"SPEP {percent_increase_from_nadir:.1f}% 증가 (다른 증상 확인 필요!)"
+            return ResponseType.SD, f"SPEP {percent_increase_from_nadir:.1f}% 증가 (다른 증상 확인 필요!){lcd_warning}"
 
-        return ResponseType.SD, ""
+        return ResponseType.SD, lcd_warning.strip() if lcd_warning else ""
 
     def _is_better_response(self, response1: ResponseType, response2: ResponseType) -> bool:
         """Check if response1 is better than response2."""
