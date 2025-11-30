@@ -4,7 +4,7 @@ Response evaluator for multiple myeloma treatment.
 
 from enum import Enum
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 import math
 
@@ -104,6 +104,9 @@ class ResponseEvaluator:
     TYPE_CHANGE_FLC_DIFF = 100  # |Kappa - Lambda| > 100
     SPEP_THRESHOLD = 0.5  # g/dL - for LCD type change detection
 
+    # Value combination window
+    COMBINATION_WINDOW_DAYS = 3  # Combine values within 3 days
+
     def evaluate(
         self,
         lab_data: LabData,
@@ -149,6 +152,96 @@ class ResponseEvaluator:
             return False
         return abs(kappa - lambda_) > self.TYPE_CHANGE_FLC_DIFF
 
+    def _is_value_valid(self, value: Optional[float]) -> bool:
+        """Check if a value is valid (not None and not NaN)."""
+        if value is None:
+            return False
+        if isinstance(value, float) and math.isnan(value):
+            return False
+        return True
+
+    def _get_combined_values(
+        self,
+        lab_data: LabData,
+        current_idx: int,
+        combined_indices: set[int]
+    ) -> tuple[Optional[float], Optional[float], Optional[float], list[int], str]:
+        """
+        Get combined SPEP, Kappa, Lambda values from within 3 days.
+
+        Looks back from current_idx to find values within COMBINATION_WINDOW_DAYS.
+        Returns the combined values and indices that were used.
+
+        Args:
+            lab_data: Laboratory data
+            current_idx: Current timepoint index
+            combined_indices: Set of indices already used in combinations
+
+        Returns:
+            Tuple of (spep, kappa, lambda_, used_indices, combination_note)
+        """
+        current_date = lab_data.dates[current_idx]
+        window_start = current_date - timedelta(days=self.COMBINATION_WINDOW_DAYS)
+
+        # Start with current values
+        spep = lab_data.spep[current_idx]
+        kappa = lab_data.kappa[current_idx]
+        lambda_ = lab_data.lambda_[current_idx]
+
+        used_indices = [current_idx]
+        value_sources = {}  # Track which date each value came from
+
+        # Track current values
+        if self._is_value_valid(spep):
+            value_sources['SPEP'] = current_date
+        if self._is_value_valid(kappa):
+            value_sources['Kappa'] = current_date
+        if self._is_value_valid(lambda_):
+            value_sources['Lambda'] = current_date
+
+        # Look back for missing values
+        for j in range(current_idx - 1, -1, -1):
+            prev_date = lab_data.dates[j]
+
+            # Stop if outside the window
+            if prev_date < window_start:
+                break
+
+            # Skip if this index is already used in another combination
+            if j in combined_indices:
+                continue
+
+            # Try to fill missing values
+            if not self._is_value_valid(spep) and self._is_value_valid(lab_data.spep[j]):
+                spep = lab_data.spep[j]
+                used_indices.append(j)
+                value_sources['SPEP'] = prev_date
+
+            if not self._is_value_valid(kappa) and self._is_value_valid(lab_data.kappa[j]):
+                kappa = lab_data.kappa[j]
+                if j not in used_indices:
+                    used_indices.append(j)
+                value_sources['Kappa'] = prev_date
+
+            if not self._is_value_valid(lambda_) and self._is_value_valid(lab_data.lambda_[j]):
+                lambda_ = lab_data.lambda_[j]
+                if j not in used_indices:
+                    used_indices.append(j)
+                value_sources['Lambda'] = prev_date
+
+        # Build combination note if values came from different dates
+        combination_note = ""
+        if len(set(value_sources.values())) > 1:
+            # Values came from multiple dates
+            sources = []
+            for key, date in sorted(value_sources.items(), key=lambda x: x[1]):
+                if date != current_date:
+                    sources.append(f"{key}:{date.strftime('%m/%d')}")
+            if sources:
+                combination_note = f"[결합: {', '.join(sources)}]"
+
+        return spep, kappa, lambda_, used_indices, combination_note
+
     def _evaluate_igg_type(
         self,
         lab_data: LabData,
@@ -182,20 +275,64 @@ class ResponseEvaluator:
         confirmed_response: Optional[ResponseType] = None
         progression_confirmed = False
         cr_achieved = False  # Track if CR was ever achieved
+        combined_indices: set[int] = set()  # Track indices used in combinations
 
         for i in range(len(lab_data)):
-            spep = lab_data.spep[i]
-            kappa = lab_data.kappa[i]
-            lambda_ = lab_data.lambda_[i]
+            raw_spep = lab_data.spep[i]
+            raw_kappa = lab_data.kappa[i]
+            raw_lambda = lab_data.lambda_[i]
             upep = lab_data.upep[i] if lab_data.upep else None
 
-            # Skip if SPEP is missing
-            if spep is None or (isinstance(spep, float) and math.isnan(spep)):
+            # Check if this index was already combined into a later evaluation
+            if i in combined_indices:
                 timepoints.append(TimePointResult(
                     date=lab_data.dates[i],
-                    spep=spep,
-                    kappa=kappa,
-                    lambda_=lambda_,
+                    spep=raw_spep,
+                    kappa=raw_kappa,
+                    lambda_=raw_lambda,
+                    upep=upep,
+                    percent_change_from_baseline=None,
+                    change_from_nadir=None,
+                    nadir_value=nadir,
+                    current_response=None,
+                    confirmed_response=confirmed_response if not progression_confirmed else None,
+                    notes="→ 다음 행에서 결합 평가됨"
+                ))
+                continue
+
+            # Try to get combined values within 3-day window
+            spep, kappa, lambda_, used_indices, combination_note = self._get_combined_values(
+                lab_data, i, combined_indices
+            )
+
+            # Mark used indices (except current) as combined and update their timepoint entries
+            for idx in used_indices:
+                if idx != i:
+                    combined_indices.add(idx)
+                    # Update the already-added timepoint to show it was combined
+                    if idx < len(timepoints):
+                        old_tp = timepoints[idx]
+                        timepoints[idx] = TimePointResult(
+                            date=old_tp.date,
+                            spep=old_tp.spep,
+                            kappa=old_tp.kappa,
+                            lambda_=old_tp.lambda_,
+                            upep=old_tp.upep,
+                            percent_change_from_baseline=None,
+                            change_from_nadir=None,
+                            nadir_value=old_tp.nadir_value,
+                            current_response=None,
+                            confirmed_response=old_tp.confirmed_response,
+                            notes="→ 다음 행에서 결합 평가됨"
+                        )
+
+            # Skip if SPEP is still missing after combination
+            if not self._is_value_valid(spep):
+                timepoints.append(TimePointResult(
+                    date=lab_data.dates[i],
+                    spep=raw_spep,
+                    kappa=raw_kappa,
+                    lambda_=raw_lambda,
                     upep=upep,
                     percent_change_from_baseline=None,
                     change_from_nadir=None,
@@ -222,7 +359,10 @@ class ResponseEvaluator:
             if current_response == ResponseType.CR:
                 cr_achieved = True
 
+            # Add combination note if values were combined
             notes = response_notes
+            if combination_note:
+                notes = f"{combination_note} {notes}".strip()
 
             # Update nadir if current value is lower
             if spep < nadir:
@@ -236,6 +376,8 @@ class ResponseEvaluator:
                         confirmed_response = current_response
                         progression_confirmed = True
                         notes = "Progression confirmed"
+                        if combination_note:
+                            notes = f"{combination_note} {notes}"
                 elif current_response in (ResponseType.CR, ResponseType.VGPR, ResponseType.PR, ResponseType.MR, ResponseType.SD):
                     # Check if response is confirmed (2 consecutive)
                     if previous_responses and previous_responses[-1] == current_response:
@@ -245,6 +387,8 @@ class ResponseEvaluator:
                             # Preserve LCD warning if present
                             lcd_warn = " (LCD Type 변경 확인!)" if "(LCD Type 변경 확인!)" in response_notes else ""
                             notes = f"{current_response.value} confirmed{lcd_warn}"
+                            if combination_note:
+                                notes = f"{combination_note} {notes}"
 
             timepoints.append(TimePointResult(
                 date=lab_data.dates[i],
@@ -365,22 +509,66 @@ class ResponseEvaluator:
         previous_responses: list[ResponseType] = []
         confirmed_response: Optional[ResponseType] = None
         progression_confirmed = False
+        combined_indices: set[int] = set()  # Track indices used in combinations
 
         for i in range(len(lab_data)):
-            spep = lab_data.spep[i]
-            kappa = lab_data.kappa[i]
-            lambda_ = lab_data.lambda_[i]
+            raw_spep = lab_data.spep[i]
+            raw_kappa = lab_data.kappa[i]
+            raw_lambda = lab_data.lambda_[i]
             upep = lab_data.upep[i] if lab_data.upep else None
+
+            # Check if this index was already combined into a later evaluation
+            if i in combined_indices:
+                timepoints.append(TimePointResult(
+                    date=lab_data.dates[i],
+                    spep=raw_spep,
+                    kappa=raw_kappa,
+                    lambda_=raw_lambda,
+                    upep=upep,
+                    percent_change_from_baseline=None,
+                    change_from_nadir=None,
+                    nadir_value=nadir,
+                    current_response=None,
+                    confirmed_response=confirmed_response if not progression_confirmed else None,
+                    notes="→ 다음 행에서 결합 평가됨"
+                ))
+                continue
+
+            # Try to get combined values within 3-day window
+            spep, kappa, lambda_, used_indices, combination_note = self._get_combined_values(
+                lab_data, i, combined_indices
+            )
+
+            # Mark used indices (except current) as combined and update their timepoint entries
+            for idx in used_indices:
+                if idx != i:
+                    combined_indices.add(idx)
+                    # Update the already-added timepoint to show it was combined
+                    if idx < len(timepoints):
+                        old_tp = timepoints[idx]
+                        timepoints[idx] = TimePointResult(
+                            date=old_tp.date,
+                            spep=old_tp.spep,
+                            kappa=old_tp.kappa,
+                            lambda_=old_tp.lambda_,
+                            upep=old_tp.upep,
+                            percent_change_from_baseline=None,
+                            change_from_nadir=None,
+                            nadir_value=old_tp.nadir_value,
+                            current_response=None,
+                            confirmed_response=old_tp.confirmed_response,
+                            notes="→ 다음 행에서 결합 평가됨"
+                        )
 
             # Get current involved FLC value
             current_flc = kappa if is_kappa else lambda_
 
-            if current_flc is None or (isinstance(current_flc, float) and math.isnan(current_flc)):
+            if not self._is_value_valid(current_flc):
                 timepoints.append(TimePointResult(
                     date=lab_data.dates[i],
-                    spep=spep,
-                    kappa=kappa,
-                    lambda_=lambda_,
+                    spep=raw_spep,
+                    kappa=raw_kappa,
+                    lambda_=raw_lambda,
                     upep=upep,
                     percent_change_from_baseline=None,
                     change_from_nadir=None,
@@ -404,24 +592,32 @@ class ResponseEvaluator:
                 change_from_nadir, percent_increase_from_nadir, baseline_flc, spep
             )
 
+            # Add combination note if values were combined
+            notes = response_notes
+            if combination_note:
+                notes = f"{combination_note} {notes}".strip()
+
             # Update nadir
             if current_flc < nadir:
                 nadir = current_flc
 
             # Confirmation logic (same as IgG)
-            notes = response_notes
             if not progression_confirmed:
                 if current_response in (ResponseType.PROGRESSION, ResponseType.PROGRESSION_TYPE_CHANGE):
                     if previous_responses and previous_responses[-1] in (ResponseType.PROGRESSION, ResponseType.PROGRESSION_TYPE_CHANGE):
                         confirmed_response = current_response
                         progression_confirmed = True
                         notes = "Progression confirmed" if current_response == ResponseType.PROGRESSION else "Progression confirmed (Type 변경 가능!)"
+                        if combination_note:
+                            notes = f"{combination_note} {notes}"
                 elif current_response in (ResponseType.CR, ResponseType.VGPR, ResponseType.PR, ResponseType.MR, ResponseType.SD):
                     if previous_responses and previous_responses[-1] == current_response:
                         # First time confirmation or upgrade to better response
                         if confirmed_response is None or self._is_better_response(current_response, confirmed_response) or current_response == confirmed_response:
                             confirmed_response = current_response
                             notes = f"{current_response.value} confirmed"
+                            if combination_note:
+                                notes = f"{combination_note} {notes}"
 
             timepoints.append(TimePointResult(
                 date=lab_data.dates[i],
