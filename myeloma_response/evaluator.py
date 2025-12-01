@@ -44,6 +44,7 @@ class TimePointResult:
     notes: str = ""
     segment_id: int = 0  # Which treatment segment this belongs to
     is_new_baseline: bool = False  # Whether this is a new baseline for a segment
+    is_combined: bool = False  # Whether this row was combined into a later evaluation
 
 
 @dataclass
@@ -455,7 +456,8 @@ class ResponseEvaluator:
                     nadir_value=nadir,
                     current_response=None,
                     confirmed_response=confirmed_response,
-                    notes="→ 다음 행에서 결합 평가됨"
+                    notes="",
+                    is_combined=True
                 ))
                 continue
 
@@ -482,7 +484,8 @@ class ResponseEvaluator:
                             nadir_value=old_tp.nadir_value,
                             current_response=None,
                             confirmed_response=old_tp.confirmed_response,
-                            notes="→ 다음 행에서 결합 평가됨"
+                            notes="",
+                            is_combined=True
                         )
 
             # Skip if SPEP is still missing after combination
@@ -676,7 +679,8 @@ class ResponseEvaluator:
                     nadir_value=nadir,
                     current_response=None,
                     confirmed_response=confirmed_response,
-                    notes="→ 다음 행에서 결합 평가됨"
+                    notes="",
+                    is_combined=True
                 ))
                 continue
 
@@ -703,7 +707,8 @@ class ResponseEvaluator:
                             nadir_value=old_tp.nadir_value,
                             current_response=None,
                             confirmed_response=old_tp.confirmed_response,
-                            notes="→ 다음 행에서 결합 평가됨"
+                            notes="",
+                            is_combined=True
                         )
 
             # Get current involved FLC value
@@ -926,9 +931,10 @@ class ResponseEvaluator:
                     nadir_value=nadir,
                     current_response=None,
                     confirmed_response=confirmed_response,
-                    notes="→ 다음 행에서 결합 평가됨",
+                    notes="",
                     segment_id=segment.segment_id,
-                    is_new_baseline=False
+                    is_new_baseline=False,
+                    is_combined=True
                 ))
                 continue
 
@@ -956,9 +962,10 @@ class ResponseEvaluator:
                                 nadir_value=old_tp.nadir_value,
                                 current_response=None,
                                 confirmed_response=old_tp.confirmed_response,
-                                notes="→ 다음 행에서 결합 평가됨",
+                                notes="",
                                 segment_id=segment.segment_id,
-                                is_new_baseline=old_tp.is_new_baseline
+                                is_new_baseline=old_tp.is_new_baseline,
+                                is_combined=True
                             )
 
             # Skip if SPEP is still missing
@@ -1106,9 +1113,10 @@ class ResponseEvaluator:
                     nadir_value=nadir,
                     current_response=None,
                     confirmed_response=confirmed_response,
-                    notes="→ 다음 행에서 결합 평가됨",
+                    notes="",
                     segment_id=segment.segment_id,
-                    is_new_baseline=False
+                    is_new_baseline=False,
+                    is_combined=True
                 ))
                 continue
 
@@ -1117,10 +1125,31 @@ class ResponseEvaluator:
                 lab_data, i, combined_indices
             )
 
-            # Mark used indices as combined
+            # Mark used indices as combined and update already-added timepoints
             for idx in used_indices:
                 if idx != i:
                     combined_indices.add(idx)
+                    # Update already-added timepoints within this segment
+                    if idx >= start_idx:
+                        tp_idx = idx - start_idx
+                        if tp_idx < len(timepoints):
+                            old_tp = timepoints[tp_idx]
+                            timepoints[tp_idx] = TimePointResult(
+                                date=old_tp.date,
+                                spep=old_tp.spep,
+                                kappa=old_tp.kappa,
+                                lambda_=old_tp.lambda_,
+                                upep=old_tp.upep,
+                                percent_change_from_baseline=None,
+                                change_from_nadir=None,
+                                nadir_value=old_tp.nadir_value,
+                                current_response=None,
+                                confirmed_response=old_tp.confirmed_response,
+                                notes="",
+                                segment_id=segment.segment_id,
+                                is_new_baseline=old_tp.is_new_baseline,
+                                is_combined=True
+                            )
 
             # Get current involved FLC value
             current_flc = kappa if is_kappa else lambda_
