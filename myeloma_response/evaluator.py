@@ -42,6 +42,20 @@ class TimePointResult:
     current_response: Optional[ResponseType]
     confirmed_response: Optional[ResponseType]
     notes: str = ""
+    segment_id: int = 0  # Which treatment segment this belongs to
+    is_new_baseline: bool = False  # Whether this is a new baseline for a segment
+
+
+@dataclass
+class TreatmentSegment:
+    """Represents a treatment period with its own baseline."""
+    segment_id: int
+    start_date: datetime
+    patient_type: PatientType
+    baseline_spep: Optional[float]
+    baseline_kappa: Optional[float]
+    baseline_lambda: Optional[float]
+    is_type_override: bool = False  # Whether type was manually overridden
 
 
 @dataclass
@@ -53,6 +67,7 @@ class EvaluationResult:
     baseline_kappa: Optional[float]
     baseline_lambda: Optional[float]
     timepoints: list[TimePointResult] = field(default_factory=list)
+    segments: list[TreatmentSegment] = field(default_factory=list)  # Treatment segments
 
 
 class ResponseEvaluator:
@@ -110,7 +125,9 @@ class ResponseEvaluator:
     def evaluate(
         self,
         lab_data: LabData,
-        classification: ClassificationResult
+        classification: ClassificationResult,
+        treatment_changes: Optional[list[datetime]] = None,
+        type_overrides: Optional[dict[datetime, PatientType]] = None
     ) -> EvaluationResult:
         """
         Evaluate treatment response for a patient.
@@ -118,26 +135,170 @@ class ResponseEvaluator:
         Args:
             lab_data: Parsed laboratory data
             classification: Patient classification result
+            treatment_changes: List of dates where new treatment started (re-baseline)
+            type_overrides: Dict mapping dates to patient types for manual type changes
 
         Returns:
             EvaluationResult with all timepoint evaluations
         """
+        treatment_changes = treatment_changes or []
+        type_overrides = type_overrides or {}
+
+        # Sort treatment changes
+        treatment_changes = sorted(treatment_changes)
+
+        # Build segments based on treatment changes and type overrides
+        segments = self._build_segments(
+            lab_data, classification, treatment_changes, type_overrides
+        )
+
         result = EvaluationResult(
             patient_type=classification.patient_type,
             classification_reason=classification.classification_reason,
             baseline_spep=classification.baseline_spep,
             baseline_kappa=classification.baseline_kappa,
-            baseline_lambda=classification.baseline_lambda
+            baseline_lambda=classification.baseline_lambda,
+            segments=segments
         )
 
-        if classification.patient_type.is_igg_type():
-            result.timepoints = self._evaluate_igg_type(lab_data, classification)
-        elif classification.patient_type.is_lcd_type():
-            result.timepoints = self._evaluate_lcd_type(lab_data, classification)
-        else:
-            result.timepoints = self._evaluate_unclassified(lab_data)
+        # Evaluate each segment
+        all_timepoints = []
+        for i, segment in enumerate(segments):
+            # Get next segment's start date to limit this segment's date range
+            next_segment_start = segments[i + 1].start_date if i + 1 < len(segments) else None
+            segment_timepoints = self._evaluate_segment(lab_data, segment, next_segment_start)
+            all_timepoints.extend(segment_timepoints)
 
+        result.timepoints = all_timepoints
         return result
+
+    def _build_segments(
+        self,
+        lab_data: LabData,
+        classification: ClassificationResult,
+        treatment_changes: list[datetime],
+        type_overrides: dict[datetime, PatientType]
+    ) -> list[TreatmentSegment]:
+        """Build treatment segments based on treatment changes and type overrides."""
+        segments = []
+
+        # Collect all segment boundary dates
+        boundary_dates = set()
+        boundary_dates.add(lab_data.dates[0])  # Initial date
+
+        for tc_date in treatment_changes:
+            boundary_dates.add(tc_date)
+
+        for to_date in type_overrides.keys():
+            boundary_dates.add(to_date)
+
+        boundary_dates = sorted(boundary_dates)
+
+        # Build segments
+        for seg_idx, start_date in enumerate(boundary_dates):
+            # Find the data index for this start date
+            start_idx = None
+            for i, d in enumerate(lab_data.dates):
+                if d >= start_date:
+                    start_idx = i
+                    break
+
+            if start_idx is None:
+                continue
+
+            # Determine patient type for this segment
+            if start_date in type_overrides:
+                patient_type = type_overrides[start_date]
+                is_type_override = True
+            elif seg_idx == 0:
+                patient_type = classification.patient_type
+                is_type_override = False
+            else:
+                # Inherit from previous segment or use classification
+                if segments:
+                    patient_type = segments[-1].patient_type
+                else:
+                    patient_type = classification.patient_type
+                is_type_override = False
+
+            # Get baseline values at segment start
+            baseline_spep = lab_data.spep[start_idx]
+            baseline_kappa = lab_data.kappa[start_idx]
+            baseline_lambda = lab_data.lambda_[start_idx]
+
+            # Try to get valid baseline values from nearby dates (within 3 days)
+            if not self._is_value_valid(baseline_spep) or not self._is_value_valid(baseline_kappa) or not self._is_value_valid(baseline_lambda):
+                for j in range(start_idx, min(start_idx + 5, len(lab_data.dates))):
+                    if not self._is_value_valid(baseline_spep) and self._is_value_valid(lab_data.spep[j]):
+                        baseline_spep = lab_data.spep[j]
+                    if not self._is_value_valid(baseline_kappa) and self._is_value_valid(lab_data.kappa[j]):
+                        baseline_kappa = lab_data.kappa[j]
+                    if not self._is_value_valid(baseline_lambda) and self._is_value_valid(lab_data.lambda_[j]):
+                        baseline_lambda = lab_data.lambda_[j]
+
+            segment = TreatmentSegment(
+                segment_id=seg_idx,
+                start_date=start_date,
+                patient_type=patient_type,
+                baseline_spep=baseline_spep,
+                baseline_kappa=baseline_kappa,
+                baseline_lambda=baseline_lambda,
+                is_type_override=is_type_override
+            )
+            segments.append(segment)
+
+        return segments
+
+    def _get_segment_for_date(self, date: datetime, segments: list[TreatmentSegment]) -> TreatmentSegment:
+        """Get the appropriate segment for a given date."""
+        result_segment = segments[0]
+        for segment in segments:
+            if date >= segment.start_date:
+                result_segment = segment
+        return result_segment
+
+    def _evaluate_segment(
+        self,
+        lab_data: LabData,
+        segment: TreatmentSegment,
+        next_segment_start: datetime = None
+    ) -> list[TimePointResult]:
+        """Evaluate a single treatment segment."""
+        # Create a classification-like object for the segment
+        class SegmentClassification:
+            def __init__(self, seg: TreatmentSegment):
+                self.patient_type = seg.patient_type
+                self.baseline_spep = seg.baseline_spep
+                self.baseline_kappa = seg.baseline_kappa
+                self.baseline_lambda = seg.baseline_lambda
+
+        seg_class = SegmentClassification(segment)
+
+        # Find indices for this segment
+        start_idx = None
+        end_idx = len(lab_data.dates)
+
+        for i, d in enumerate(lab_data.dates):
+            if d >= segment.start_date:
+                if start_idx is None:
+                    start_idx = i
+            # Find end index (before next segment starts)
+            if next_segment_start and d >= next_segment_start:
+                end_idx = i
+                break
+
+        if start_idx is None:
+            return []
+
+        # Evaluate with the segment's date range
+        if segment.patient_type.is_igg_type():
+            timepoints = self._evaluate_igg_type_segment(lab_data, seg_class, segment, end_idx)
+        elif segment.patient_type.is_lcd_type():
+            timepoints = self._evaluate_lcd_type_segment(lab_data, seg_class, segment, end_idx)
+        else:
+            timepoints = self._evaluate_unclassified_segment(lab_data, segment, end_idx)
+
+        return timepoints
 
     def _check_flc_ratio_normal(self, kappa: Optional[float], lambda_: Optional[float]) -> bool:
         """Check if FLC ratio is in normal range (0.26~1.65)."""
@@ -688,6 +849,389 @@ class ResponseEvaluator:
                 current_response=ResponseType.NOT_EVALUABLE,
                 confirmed_response=None,
                 notes="Unclassified patient type - evaluation not available"
+            ))
+
+        return timepoints
+
+    def _evaluate_igg_type_segment(
+        self,
+        lab_data: LabData,
+        classification,
+        segment: TreatmentSegment,
+        end_idx: int = None
+    ) -> list[TimePointResult]:
+        """Evaluate IgG type patients for a specific treatment segment."""
+        timepoints = []
+        baseline = classification.baseline_spep
+
+        # Find segment date range
+        start_idx = None
+        for i, d in enumerate(lab_data.dates):
+            if d >= segment.start_date:
+                start_idx = i
+                break
+
+        if start_idx is None:
+            return []
+
+        if end_idx is None:
+            end_idx = len(lab_data)
+
+        if baseline is None or baseline == 0:
+            # Cannot evaluate without valid baseline
+            for i in range(start_idx, end_idx):
+                is_first = (i == start_idx)
+                timepoints.append(TimePointResult(
+                    date=lab_data.dates[i],
+                    spep=lab_data.spep[i],
+                    kappa=lab_data.kappa[i],
+                    lambda_=lab_data.lambda_[i],
+                    upep=lab_data.upep[i] if lab_data.upep else None,
+                    percent_change_from_baseline=None,
+                    change_from_nadir=None,
+                    nadir_value=None,
+                    current_response=ResponseType.NOT_EVALUABLE,
+                    confirmed_response=None,
+                    notes="Invalid baseline SPEP value",
+                    segment_id=segment.segment_id,
+                    is_new_baseline=is_first and segment.segment_id > 0
+                ))
+            return timepoints
+
+        # Track nadir (minimum value) for progression detection
+        nadir = baseline
+        previous_responses: list[ResponseType] = []
+        confirmed_response: Optional[ResponseType] = None
+        combined_indices: set[int] = set()
+
+        for i in range(start_idx, end_idx):
+            current_date = lab_data.dates[i]
+            is_first = (i == start_idx)
+
+            raw_spep = lab_data.spep[i]
+            raw_kappa = lab_data.kappa[i]
+            raw_lambda = lab_data.lambda_[i]
+            upep = lab_data.upep[i] if lab_data.upep else None
+
+            # Check if this index was already combined
+            if i in combined_indices:
+                timepoints.append(TimePointResult(
+                    date=current_date,
+                    spep=raw_spep,
+                    kappa=raw_kappa,
+                    lambda_=raw_lambda,
+                    upep=upep,
+                    percent_change_from_baseline=None,
+                    change_from_nadir=None,
+                    nadir_value=nadir,
+                    current_response=None,
+                    confirmed_response=confirmed_response,
+                    notes="→ 다음 행에서 결합 평가됨",
+                    segment_id=segment.segment_id,
+                    is_new_baseline=False
+                ))
+                continue
+
+            # Try to get combined values within 3-day window
+            spep, kappa, lambda_, used_indices, combination_note = self._get_combined_values(
+                lab_data, i, combined_indices
+            )
+
+            # Mark used indices as combined
+            for idx in used_indices:
+                if idx != i:
+                    combined_indices.add(idx)
+                    if idx < len(timepoints):
+                        old_tp = timepoints[idx - start_idx] if idx >= start_idx else None
+                        if old_tp:
+                            tp_idx = idx - start_idx
+                            timepoints[tp_idx] = TimePointResult(
+                                date=old_tp.date,
+                                spep=old_tp.spep,
+                                kappa=old_tp.kappa,
+                                lambda_=old_tp.lambda_,
+                                upep=old_tp.upep,
+                                percent_change_from_baseline=None,
+                                change_from_nadir=None,
+                                nadir_value=old_tp.nadir_value,
+                                current_response=None,
+                                confirmed_response=old_tp.confirmed_response,
+                                notes="→ 다음 행에서 결합 평가됨",
+                                segment_id=segment.segment_id,
+                                is_new_baseline=old_tp.is_new_baseline
+                            )
+
+            # Skip if SPEP is still missing
+            if not self._is_value_valid(spep):
+                timepoints.append(TimePointResult(
+                    date=current_date,
+                    spep=raw_spep,
+                    kappa=raw_kappa,
+                    lambda_=raw_lambda,
+                    upep=upep,
+                    percent_change_from_baseline=None,
+                    change_from_nadir=None,
+                    nadir_value=nadir,
+                    current_response=ResponseType.NOT_EVALUABLE,
+                    confirmed_response=confirmed_response,
+                    notes="Missing SPEP value",
+                    segment_id=segment.segment_id,
+                    is_new_baseline=is_first and segment.segment_id > 0
+                ))
+                continue
+
+            # Calculate percent change from baseline
+            percent_change = ((baseline - spep) / baseline) * 100
+
+            # Calculate change from nadir
+            change_from_nadir = spep - nadir
+            percent_increase_from_nadir = ((spep - nadir) / nadir * 100) if nadir > 0 else 0
+
+            # Determine current response
+            current_response, response_notes = self._determine_igg_response(
+                spep, percent_change, change_from_nadir, percent_increase_from_nadir, kappa, lambda_
+            )
+
+            # Add combination note and segment note if applicable
+            notes = response_notes
+            if combination_note:
+                notes = f"{combination_note} {notes}".strip()
+            if is_first and segment.segment_id > 0:
+                segment_note = f"[Segment {segment.segment_id + 1} 시작 - 새 Baseline]"
+                notes = f"{segment_note} {notes}".strip()
+
+            # Update nadir if current value is lower
+            if spep < nadir:
+                nadir = spep
+
+            # Determine confirmed response
+            if previous_responses and previous_responses[-1] == current_response:
+                confirmed_response = current_response
+                lcd_warn = " (LCD Type 변경 확인!)" if "(LCD Type 변경 확인!)" in response_notes else ""
+                notes = f"{current_response.value} confirmed{lcd_warn}"
+                if combination_note:
+                    notes = f"{combination_note} {notes}"
+
+            timepoints.append(TimePointResult(
+                date=current_date,
+                spep=spep,
+                kappa=kappa,
+                lambda_=lambda_,
+                upep=upep,
+                percent_change_from_baseline=percent_change,
+                change_from_nadir=change_from_nadir,
+                nadir_value=nadir,
+                current_response=current_response,
+                confirmed_response=confirmed_response,
+                notes=notes,
+                segment_id=segment.segment_id,
+                is_new_baseline=is_first and segment.segment_id > 0
+            ))
+
+            previous_responses.append(current_response)
+
+        return timepoints
+
+    def _evaluate_lcd_type_segment(
+        self,
+        lab_data: LabData,
+        classification,
+        segment: TreatmentSegment,
+        end_idx: int = None
+    ) -> list[TimePointResult]:
+        """Evaluate LCD type patients for a specific treatment segment."""
+        timepoints = []
+
+        # Determine which FLC is involved
+        is_kappa = segment.patient_type == PatientType.LCD_KAPPA
+        baseline_flc = classification.baseline_kappa if is_kappa else classification.baseline_lambda
+
+        # Find segment date range
+        start_idx = None
+        for i, d in enumerate(lab_data.dates):
+            if d >= segment.start_date:
+                start_idx = i
+                break
+
+        if start_idx is None:
+            return []
+
+        if end_idx is None:
+            end_idx = len(lab_data)
+
+        if baseline_flc is None or baseline_flc == 0:
+            for i in range(start_idx, end_idx):
+                is_first = (i == start_idx)
+                timepoints.append(TimePointResult(
+                    date=lab_data.dates[i],
+                    spep=lab_data.spep[i],
+                    kappa=lab_data.kappa[i],
+                    lambda_=lab_data.lambda_[i],
+                    upep=lab_data.upep[i] if lab_data.upep else None,
+                    percent_change_from_baseline=None,
+                    change_from_nadir=None,
+                    nadir_value=None,
+                    current_response=ResponseType.NOT_EVALUABLE,
+                    confirmed_response=None,
+                    notes="Invalid baseline FLC value",
+                    segment_id=segment.segment_id,
+                    is_new_baseline=is_first and segment.segment_id > 0
+                ))
+            return timepoints
+
+        nadir = baseline_flc
+        previous_responses: list[ResponseType] = []
+        confirmed_response: Optional[ResponseType] = None
+        combined_indices: set[int] = set()
+
+        for i in range(start_idx, end_idx):
+            current_date = lab_data.dates[i]
+            is_first = (i == start_idx)
+
+            raw_spep = lab_data.spep[i]
+            raw_kappa = lab_data.kappa[i]
+            raw_lambda = lab_data.lambda_[i]
+            upep = lab_data.upep[i] if lab_data.upep else None
+
+            # Check if this index was already combined
+            if i in combined_indices:
+                timepoints.append(TimePointResult(
+                    date=current_date,
+                    spep=raw_spep,
+                    kappa=raw_kappa,
+                    lambda_=raw_lambda,
+                    upep=upep,
+                    percent_change_from_baseline=None,
+                    change_from_nadir=None,
+                    nadir_value=nadir,
+                    current_response=None,
+                    confirmed_response=confirmed_response,
+                    notes="→ 다음 행에서 결합 평가됨",
+                    segment_id=segment.segment_id,
+                    is_new_baseline=False
+                ))
+                continue
+
+            # Try to get combined values
+            spep, kappa, lambda_, used_indices, combination_note = self._get_combined_values(
+                lab_data, i, combined_indices
+            )
+
+            # Mark used indices as combined
+            for idx in used_indices:
+                if idx != i:
+                    combined_indices.add(idx)
+
+            # Get current involved FLC value
+            current_flc = kappa if is_kappa else lambda_
+
+            if not self._is_value_valid(current_flc):
+                timepoints.append(TimePointResult(
+                    date=current_date,
+                    spep=raw_spep,
+                    kappa=raw_kappa,
+                    lambda_=raw_lambda,
+                    upep=upep,
+                    percent_change_from_baseline=None,
+                    change_from_nadir=None,
+                    nadir_value=nadir,
+                    current_response=ResponseType.NOT_EVALUABLE,
+                    confirmed_response=confirmed_response,
+                    notes="Missing FLC value",
+                    segment_id=segment.segment_id,
+                    is_new_baseline=is_first and segment.segment_id > 0
+                ))
+                continue
+
+            # Calculate percent change from baseline
+            percent_change = ((baseline_flc - current_flc) / baseline_flc) * 100
+
+            # Calculate change from nadir
+            change_from_nadir = current_flc - nadir
+            percent_increase_from_nadir = ((current_flc - nadir) / nadir * 100) if nadir > 0 else 0
+
+            # Determine current response
+            current_response, response_notes = self._determine_lcd_response(
+                current_flc, kappa, lambda_, percent_change,
+                change_from_nadir, percent_increase_from_nadir, baseline_flc, spep
+            )
+
+            # Add combination note and segment note if applicable
+            notes = response_notes
+            if combination_note:
+                notes = f"{combination_note} {notes}".strip()
+            if is_first and segment.segment_id > 0:
+                segment_note = f"[Segment {segment.segment_id + 1} 시작 - 새 Baseline]"
+                notes = f"{segment_note} {notes}".strip()
+
+            # Update nadir
+            if current_flc < nadir:
+                nadir = current_flc
+
+            # Determine confirmed response
+            if previous_responses and previous_responses[-1] == current_response:
+                confirmed_response = current_response
+                notes = f"{current_response.value} confirmed"
+                if combination_note:
+                    notes = f"{combination_note} {notes}"
+
+            timepoints.append(TimePointResult(
+                date=current_date,
+                spep=spep,
+                kappa=kappa,
+                lambda_=lambda_,
+                upep=upep,
+                percent_change_from_baseline=percent_change,
+                change_from_nadir=change_from_nadir,
+                nadir_value=nadir,
+                current_response=current_response,
+                confirmed_response=confirmed_response,
+                notes=notes,
+                segment_id=segment.segment_id,
+                is_new_baseline=is_first and segment.segment_id > 0
+            ))
+
+            previous_responses.append(current_response)
+
+        return timepoints
+
+    def _evaluate_unclassified_segment(
+        self,
+        lab_data: LabData,
+        segment: TreatmentSegment,
+        end_idx: int = None
+    ) -> list[TimePointResult]:
+        """Evaluate unclassified patients for a specific segment."""
+        timepoints = []
+
+        start_idx = None
+        for i, d in enumerate(lab_data.dates):
+            if d >= segment.start_date:
+                start_idx = i
+                break
+
+        if start_idx is None:
+            return []
+
+        if end_idx is None:
+            end_idx = len(lab_data)
+
+        for i in range(start_idx, end_idx):
+            is_first = (i == start_idx)
+            timepoints.append(TimePointResult(
+                date=lab_data.dates[i],
+                spep=lab_data.spep[i],
+                kappa=lab_data.kappa[i],
+                lambda_=lab_data.lambda_[i],
+                upep=lab_data.upep[i] if lab_data.upep else None,
+                percent_change_from_baseline=None,
+                change_from_nadir=None,
+                nadir_value=None,
+                current_response=ResponseType.NOT_EVALUABLE,
+                confirmed_response=None,
+                notes="Unclassified patient type - evaluation not available",
+                segment_id=segment.segment_id,
+                is_new_baseline=is_first and segment.segment_id > 0
             ))
 
         return timepoints

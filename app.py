@@ -11,13 +11,14 @@ import os
 from io import BytesIO
 
 # Import our modules
-from myeloma_response.parser import ExcelParser
+from myeloma_response.parser import ExcelParser, LabData
 from myeloma_response.classifier import PatientClassifier, PatientType
-from myeloma_response.evaluator import ResponseEvaluator, ResponseType
+from myeloma_response.evaluator import ResponseEvaluator, ResponseType, TreatmentSegment
+from datetime import datetime
 
 
-def evaluate_uploaded_file(uploaded_file):
-    """Evaluate an uploaded Excel file."""
+def parse_uploaded_file(uploaded_file):
+    """Parse an uploaded Excel file and return lab_data and classification."""
     # Save uploaded file to a temporary file
     with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp_file:
         tmp_file.write(uploaded_file.getvalue())
@@ -33,27 +34,61 @@ def evaluate_uploaded_file(uploaded_file):
         baseline_spep, baseline_kappa, baseline_lambda = lab_data.get_baseline_values()
         classification = classifier.classify(baseline_spep, baseline_kappa, baseline_lambda)
 
-        # Evaluate response
-        evaluator = ResponseEvaluator()
-        result = evaluator.evaluate(lab_data, classification)
-
-        return result, None
+        return lab_data, classification, None
     except Exception as e:
-        return None, str(e)
+        return None, None, str(e)
     finally:
         # Clean up temporary file
         os.unlink(tmp_path)
+
+
+def evaluate_with_options(
+    lab_data: LabData,
+    classification,
+    treatment_changes: list[datetime] = None,
+    type_overrides: dict[datetime, PatientType] = None
+):
+    """Evaluate with treatment changes and type overrides."""
+    try:
+        evaluator = ResponseEvaluator()
+        result = evaluator.evaluate(
+            lab_data,
+            classification,
+            treatment_changes=treatment_changes,
+            type_overrides=type_overrides
+        )
+        return result, None
+    except Exception as e:
+        return None, str(e)
+
+
+def evaluate_uploaded_file(uploaded_file):
+    """Evaluate an uploaded Excel file (legacy function for compatibility)."""
+    lab_data, classification, error = parse_uploaded_file(uploaded_file)
+    if error:
+        return None, error
+    return evaluate_with_options(lab_data, classification)
 
 
 def create_results_dataframe(result):
     """Convert evaluation results to a pandas DataFrame."""
     from myeloma_response.classifier import PatientType
 
-    is_lcd_type = result.patient_type.is_lcd_type()
-    is_igg_type = result.patient_type.is_igg_type()
+    # Check if there are multiple segments
+    has_segments = hasattr(result, 'segments') and len(result.segments) > 1
 
     data = []
     for idx, tp in enumerate(result.timepoints):
+        # Determine type for this timepoint (from segment if available)
+        if has_segments and hasattr(tp, 'segment_id'):
+            segment = result.segments[tp.segment_id] if tp.segment_id < len(result.segments) else None
+            current_type = segment.patient_type if segment else result.patient_type
+        else:
+            current_type = result.patient_type
+
+        is_lcd_type = current_type.is_lcd_type()
+        is_igg_type = current_type.is_igg_type()
+
         # Calculate FLC ratio
         flc_ratio = None
         if tp.kappa is not None and tp.lambda_ is not None and tp.lambda_ != 0:
@@ -62,12 +97,19 @@ def create_results_dataframe(result):
         row = {
             "Timepoint": idx + 1,
             "Date": tp.date.strftime("%Y-%m-%d") if tp.date else None,
-            "SPEP": tp.spep,
-            "Kappa": tp.kappa,
-            "Lambda": tp.lambda_,
-            "FLC Ratio": flc_ratio,
-            "UPEP": tp.upep,
         }
+
+        # Add segment info if multiple segments exist
+        if has_segments and hasattr(tp, 'segment_id'):
+            row["Segment"] = tp.segment_id + 1
+            if hasattr(tp, 'is_new_baseline') and tp.is_new_baseline:
+                row["Segment"] = f"{tp.segment_id + 1} (새 BL)"
+
+        row["SPEP"] = tp.spep
+        row["Kappa"] = tp.kappa
+        row["Lambda"] = tp.lambda_
+        row["FLC Ratio"] = flc_ratio
+        row["UPEP"] = tp.upep
 
         # Add type-specific columns with clear labels
         if is_lcd_type:
@@ -184,9 +226,113 @@ def main():
     if uploaded_file is not None:
         st.sidebar.success(f"✅ 파일 업로드됨: {uploaded_file.name}")
 
-        # Evaluate
-        with st.spinner("분석 중..."):
-            result, error = evaluate_uploaded_file(uploaded_file)
+        # Parse file first
+        with st.spinner("파일 분석 중..."):
+            lab_data, classification, parse_error = parse_uploaded_file(uploaded_file)
+
+        if parse_error:
+            st.error(f"❌ 파일 파싱 오류: {parse_error}")
+            return
+
+        # Get available dates for selection
+        available_dates = [d.strftime("%Y-%m-%d") for d in lab_data.dates]
+
+        # Sidebar options for treatment changes and type overrides
+        st.sidebar.markdown("---")
+        st.sidebar.header("⚙️ 평가 옵션")
+
+        # Initial type override
+        st.sidebar.subheader("📋 초기 타입 설정")
+        type_options = ["자동 분류", "IgG_Kappa", "IgG_Lambda", "LCD_Kappa", "LCD_Lambda"]
+        initial_type = st.sidebar.selectbox(
+            "환자 타입 (첫 번째 시점)",
+            type_options,
+            index=0,
+            help="자동 분류를 선택하면 첫 검사값 기준으로 자동 분류됩니다."
+        )
+
+        # Treatment changes (re-baseline)
+        st.sidebar.subheader("💊 치료 변경 시점")
+        st.sidebar.caption("치료 변경 시 새로운 baseline으로 재평가합니다.")
+
+        treatment_change_dates = []
+        num_treatment_changes = st.sidebar.number_input(
+            "치료 변경 횟수",
+            min_value=0,
+            max_value=10,
+            value=0,
+            key="num_treatment_changes"
+        )
+
+        for i in range(num_treatment_changes):
+            tc_date = st.sidebar.selectbox(
+                f"치료 변경 {i+1} 시점",
+                available_dates[1:],  # Exclude first date
+                key=f"tc_date_{i}"
+            )
+            if tc_date:
+                treatment_change_dates.append(tc_date)
+
+        # Type changes at specific dates
+        st.sidebar.subheader("🔄 타입 변경 시점")
+        st.sidebar.caption("특정 시점부터 환자 타입을 변경합니다.")
+
+        type_overrides = {}
+        num_type_changes = st.sidebar.number_input(
+            "타입 변경 횟수",
+            min_value=0,
+            max_value=10,
+            value=0,
+            key="num_type_changes"
+        )
+
+        for i in range(num_type_changes):
+            col1, col2 = st.sidebar.columns(2)
+            with col1:
+                change_date = st.selectbox(
+                    f"시점 {i+1}",
+                    available_dates[1:],  # Exclude first date
+                    key=f"type_change_date_{i}"
+                )
+            with col2:
+                change_type = st.selectbox(
+                    f"타입",
+                    ["IgG_Kappa", "IgG_Lambda", "LCD_Kappa", "LCD_Lambda"],
+                    key=f"type_change_type_{i}"
+                )
+            if change_date:
+                type_overrides[change_date] = change_type
+
+        # Convert dates to datetime and types to PatientType
+        treatment_changes_dt = []
+        for d in treatment_change_dates:
+            treatment_changes_dt.append(datetime.strptime(d, "%Y-%m-%d"))
+
+        type_overrides_dt = {}
+        type_map = {
+            "IgG_Kappa": PatientType.IGG_KAPPA,
+            "IgG_Lambda": PatientType.IGG_LAMBDA,
+            "LCD_Kappa": PatientType.LCD_KAPPA,
+            "LCD_Lambda": PatientType.LCD_LAMBDA,
+        }
+
+        for d, t in type_overrides.items():
+            dt = datetime.strptime(d, "%Y-%m-%d")
+            type_overrides_dt[dt] = type_map[t]
+
+        # Handle initial type override
+        if initial_type != "자동 분류":
+            first_date = lab_data.dates[0]
+            type_overrides_dt[first_date] = type_map[initial_type]
+
+        # Evaluate with options
+        with st.spinner("평가 중..."):
+            result, error = evaluate_with_options(
+                lab_data,
+                classification,
+                treatment_changes=treatment_changes_dt if treatment_changes_dt else None,
+                type_overrides=type_overrides_dt if type_overrides_dt else None
+            )
 
         if error:
             st.error(f"❌ 오류 발생: {error}")
@@ -199,11 +345,12 @@ def main():
 
             with col1:
                 st.subheader("환자 분류")
-                st.metric("Patient Type", result.patient_type.value)
-                st.caption(result.classification_reason)
+                # Show initial auto classification
+                st.metric("자동 분류", classification.patient_type.value)
+                st.caption(classification.classification_reason)
 
             with col2:
-                st.subheader("Baseline Values")
+                st.subheader("Baseline Values (초기)")
                 baseline_col1, baseline_col2, baseline_col3, baseline_col4 = st.columns(4)
                 baseline_col1.metric("SPEP", f"{result.baseline_spep:.2f}" if result.baseline_spep else "N/A")
                 baseline_col2.metric("Kappa", f"{result.baseline_kappa:.2f}" if result.baseline_kappa else "N/A")
@@ -215,6 +362,22 @@ def main():
                     baseline_col4.metric("FLC Ratio", f"{flc_ratio:.2f}", ratio_status)
                 else:
                     baseline_col4.metric("FLC Ratio", "N/A")
+
+            # Display segments info if there are multiple segments
+            if hasattr(result, 'segments') and len(result.segments) > 1:
+                st.subheader("📋 치료 구간 (Segments)")
+                segment_data = []
+                for seg in result.segments:
+                    override_text = " (수동 설정)" if seg.is_type_override else ""
+                    segment_data.append({
+                        "구간": seg.segment_id + 1,
+                        "시작일": seg.start_date.strftime("%Y-%m-%d"),
+                        "타입": f"{seg.patient_type.value}{override_text}",
+                        "Baseline SPEP": f"{seg.baseline_spep:.2f}" if seg.baseline_spep else "N/A",
+                        "Baseline Kappa": f"{seg.baseline_kappa:.2f}" if seg.baseline_kappa else "N/A",
+                        "Baseline Lambda": f"{seg.baseline_lambda:.2f}" if seg.baseline_lambda else "N/A"
+                    })
+                st.dataframe(pd.DataFrame(segment_data), use_container_width=True, hide_index=True)
 
             # Response summary
             st.subheader("📈 Response Summary")
