@@ -78,7 +78,12 @@ def create_results_dataframe(result):
     has_segments = hasattr(result, 'segments') and len(result.segments) > 1
 
     data = []
+    display_idx = 0
     for idx, tp in enumerate(result.timepoints):
+        # Skip combined rows (they are merged into later evaluations)
+        if hasattr(tp, 'is_combined') and tp.is_combined:
+            continue
+        display_idx += 1
         # Determine type for this timepoint (from segment if available)
         if has_segments and hasattr(tp, 'segment_id'):
             segment = result.segments[tp.segment_id] if tp.segment_id < len(result.segments) else None
@@ -95,7 +100,7 @@ def create_results_dataframe(result):
             flc_ratio = round(tp.kappa / tp.lambda_, 2)
 
         row = {
-            "Timepoint": idx + 1,
+            "Timepoint": display_idx,
             "Date": tp.date.strftime("%Y-%m-%d") if tp.date else None,
         }
 
@@ -150,7 +155,10 @@ def get_response_summary(result):
     cr_date = None
     progression_date = None
 
-    for tp in result.timepoints:
+    # Filter out combined timepoints
+    active_timepoints = [tp for tp in result.timepoints if not (hasattr(tp, 'is_combined') and tp.is_combined)]
+
+    for tp in active_timepoints:
         if tp.confirmed_response:
             if tp.confirmed_response == ResponseType.CR and cr_date is None:
                 cr_date = tp.date
@@ -439,13 +447,11 @@ def main():
                     return ""
 
                 def highlight_notes(val):
-                    """Highlight notes for combined rows and combination info."""
+                    """Highlight notes for combination info."""
                     if val is None:
                         return ""
                     val_str = str(val)
-                    if "결합 평가됨" in val_str:
-                        return "background-color: #E0E0E0; font-style: italic"  # Gray italic for combined
-                    elif "[결합:" in val_str:
+                    if "[결합:" in val_str:
                         return "background-color: #E6F3FF"  # Light blue for combination info
                     return ""
 
@@ -475,13 +481,15 @@ def main():
             st.subheader("📊 Statistics")
             stat_col1, stat_col2, stat_col3, stat_col4 = st.columns(4)
 
-            total_timepoints = len(result.timepoints)
-            evaluable = sum(1 for tp in result.timepoints if tp.current_response and tp.current_response != ResponseType.NOT_EVALUABLE)
+            # Filter out combined timepoints for statistics
+            active_timepoints = [tp for tp in result.timepoints if not (hasattr(tp, 'is_combined') and tp.is_combined)]
+            total_timepoints = len(active_timepoints)
+            evaluable = sum(1 for tp in active_timepoints if tp.current_response and tp.current_response != ResponseType.NOT_EVALUABLE)
 
             stat_col1.metric("Total Timepoints", total_timepoints)
             stat_col2.metric("Evaluable", evaluable)
-            stat_col3.metric("bCR Count", sum(1 for tp in result.timepoints if tp.confirmed_response == ResponseType.CR))
-            stat_col4.metric("Progression Count", sum(1 for tp in result.timepoints if tp.confirmed_response == ResponseType.PROGRESSION))
+            stat_col3.metric("bCR Count", sum(1 for tp in active_timepoints if tp.confirmed_response == ResponseType.CR))
+            stat_col4.metric("Progression Count", sum(1 for tp in active_timepoints if tp.confirmed_response == ResponseType.PROGRESSION))
 
             # Download button
             st.subheader("💾 결과 다운로드")
