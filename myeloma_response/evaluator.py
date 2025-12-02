@@ -14,7 +14,7 @@ from .parser import LabData
 
 class ResponseType(Enum):
     """Treatment response categories for multiple myeloma."""
-    CR = "bCR"  # Biochemical Complete Response
+    CR = "nCR"  # Near Complete Response (biochemical)
     VGPR = "VGPR"  # Very Good Partial Response
     PR = "PR"  # Partial Response
     MR = "MR"  # Minor Response
@@ -81,13 +81,13 @@ class ResponseEvaluator:
     - MR: >= 25% reduction
     - PR: >= 50% reduction
     - VGPR: >= 90% reduction
-    - bCR: SPEP = 0 (biochemical Complete Response)
+    - nCR: SPEP = 0 (near Complete Response)
     - PD: >= 25% increase from nadir AND >= 0.5 g/dL absolute increase
     - LCD Type Check: If |Kappa-Lambda| > 100 at any time → "LCD Type 변경 확인 필요!"
 
     For LCD type patients (SPEP < 0.5, |Kappa-Lambda| > 100):
     - Progression (Type Change): SPEP >= 0.5 (possible change to IgG type)
-    - bCR: FLC ratio (Kappa/Lambda) in normal range (0.26~1.65)
+    - nCR: FLC ratio (Kappa/Lambda) in normal range (0.26~1.65)
     - VGPR: iFLC >= 90% decrease from baseline OR iFLC < 100
     - PR: iFLC >= 50% decrease from baseline
     - PD: iFLC >= 25% increase from nadir AND absolute increase >= 100 from nadir
@@ -517,7 +517,7 @@ class ResponseEvaluator:
                 spep, percent_change, change_from_nadir, percent_increase_from_nadir, kappa, lambda_
             )
 
-            # Track if bCR was achieved
+            # Track if nCR was achieved
             if current_response == ResponseType.CR:
                 cr_achieved = True
 
@@ -578,7 +578,7 @@ class ResponseEvaluator:
         if self._check_type_change_possible(kappa, lambda_):
             lcd_warning = " (LCD Type 변경 확인!)"
 
-        # Check for bCR first
+        # Check for nCR first
         if spep == 0:
             return ResponseType.CR, f"SPEP = 0{lcd_warning}"
 
