@@ -588,48 +588,100 @@ def main():
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
 
-            # Response chart - different based on patient type
+            # Trend Charts - User selectable metrics
+            st.subheader("📈 Trend Charts")
+
+            # Available metrics for charting
+            available_metrics = []
+            metric_labels = {}
+
+            # Add available metrics based on dataframe columns
+            if "SPEP" in df.columns and df["SPEP"].notna().any():
+                available_metrics.append("SPEP")
+                metric_labels["SPEP"] = "SPEP (M-protein)"
+
+            if "Kappa" in df.columns and df["Kappa"].notna().any():
+                available_metrics.append("Kappa")
+                metric_labels["Kappa"] = "Kappa (Free Light Chain)"
+
+            if "Lambda" in df.columns and df["Lambda"].notna().any():
+                available_metrics.append("Lambda")
+                metric_labels["Lambda"] = "Lambda (Free Light Chain)"
+
+            if "FLC Ratio" in df.columns and df["FLC Ratio"].notna().any():
+                available_metrics.append("FLC Ratio")
+                metric_labels["FLC Ratio"] = "FLC Ratio (Kappa/Lambda)"
+
+            if "dFLC" in df.columns and df["dFLC"].notna().any():
+                available_metrics.append("dFLC")
+                metric_labels["dFLC"] = "dFLC (|Kappa-Lambda|)"
+
+            if "iFLC" in df.columns and df["iFLC"].notna().any():
+                available_metrics.append("iFLC")
+                metric_labels["iFLC"] = "iFLC (Involved FLC)"
+
+            if "uFLC" in df.columns and df["uFLC"].notna().any():
+                available_metrics.append("uFLC")
+                metric_labels["uFLC"] = "uFLC (Uninvolved FLC)"
+
+            if "UPEP" in df.columns and df["UPEP"].notna().any():
+                available_metrics.append("UPEP")
+                metric_labels["UPEP"] = "UPEP (Urine Protein)"
+
+            # Default selection based on patient type
             if result.patient_type.is_igg_type():
-                st.subheader("📈 SPEP Trend")
-                chart_df = df[df["SPEP"].notna()][["Date", "SPEP"]].copy()
-                if not chart_df.empty:
-                    chart_df["Date"] = pd.to_datetime(chart_df["Date"])
-                    st.line_chart(chart_df.set_index("Date")["SPEP"])
-
+                default_metrics = ["SPEP", "FLC Ratio", "dFLC"]
             elif result.patient_type.is_lcd_type():
-                st.subheader("📈 FLC Trends")
-
-                # Determine which is iFLC based on patient type
-                is_kappa = result.patient_type == PatientType.LCD_KAPPA
-                iflc_col = "Kappa" if is_kappa else "Lambda"
-                iflc_label = "iFLC (Kappa)" if is_kappa else "iFLC (Lambda)"
-
-                col_chart1, col_chart2 = st.columns(2)
-
-                with col_chart1:
-                    st.markdown(f"**{iflc_label} Trend**")
-                    iflc_df = df[df[iflc_col].notna()][["Date", iflc_col]].copy()
-                    if not iflc_df.empty:
-                        iflc_df["Date"] = pd.to_datetime(iflc_df["Date"])
-                        iflc_df = iflc_df.rename(columns={iflc_col: iflc_label})
-                        st.line_chart(iflc_df.set_index("Date")[iflc_label])
-
-                with col_chart2:
-                    st.markdown("**FLC Ratio Trend**")
-                    ratio_df = df[df["FLC Ratio"].notna()][["Date", "FLC Ratio"]].copy()
-                    if not ratio_df.empty:
-                        ratio_df["Date"] = pd.to_datetime(ratio_df["Date"])
-                        st.line_chart(ratio_df.set_index("Date")["FLC Ratio"])
-                        st.caption("정상 범위: 0.26 ~ 1.65")
-
+                default_metrics = ["iFLC", "FLC Ratio", "dFLC"]
             else:
-                # Unclassified - show all trends
-                st.subheader("📈 Lab Value Trends")
-                chart_df = df[["Date", "SPEP", "Kappa", "Lambda"]].copy()
+                default_metrics = ["SPEP", "Kappa", "Lambda"]
+
+            # Filter to only include metrics that are available
+            default_metrics = [m for m in default_metrics if m in available_metrics]
+
+            # Metric selection
+            selected_metrics = st.multiselect(
+                "표시할 지표 선택",
+                options=available_metrics,
+                default=default_metrics,
+                format_func=lambda x: metric_labels.get(x, x),
+                help="여러 지표를 선택하여 트렌드를 비교할 수 있습니다."
+            )
+
+            if selected_metrics:
+                # Create chart data
+                chart_cols = ["Date"] + selected_metrics
+                chart_df = df[chart_cols].copy()
                 chart_df = chart_df.dropna(subset=["Date"])
+
                 if not chart_df.empty:
                     chart_df["Date"] = pd.to_datetime(chart_df["Date"])
-                    st.line_chart(chart_df.set_index("Date"))
+                    chart_df = chart_df.set_index("Date")
+
+                    # Display charts - one row per 2 metrics
+                    num_metrics = len(selected_metrics)
+                    for i in range(0, num_metrics, 2):
+                        cols = st.columns(2)
+
+                        for j, col in enumerate(cols):
+                            metric_idx = i + j
+                            if metric_idx < num_metrics:
+                                metric = selected_metrics[metric_idx]
+                                with col:
+                                    st.markdown(f"**{metric_labels.get(metric, metric)}**")
+                                    metric_df = chart_df[[metric]].dropna()
+                                    if not metric_df.empty:
+                                        st.line_chart(metric_df)
+
+                                        # Add reference lines info
+                                        if metric == "FLC Ratio":
+                                            st.caption("정상 범위: 0.26 ~ 1.65")
+                                        elif metric == "dFLC":
+                                            st.caption("LCD 타입 기준: > 100")
+                                        elif metric == "SPEP":
+                                            st.caption("IgG 타입 기준: ≥ 0.5 g/dL")
+            else:
+                st.info("📊 차트를 보려면 위에서 지표를 선택하세요.")
 
     else:
         # Show instructions when no file is uploaded
