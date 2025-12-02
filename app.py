@@ -204,27 +204,52 @@ def get_response_summary(result):
     }
 
 
-def export_to_excel(result):
+def export_to_excel(result, classification=None, initial_type_override=None):
     """Export results to Excel bytes for download."""
     output = BytesIO()
 
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         # Summary sheet
+        # Determine displayed patient type (considering override)
+        if initial_type_override:
+            displayed_type = initial_type_override
+            auto_type = classification.patient_type.value if classification else "N/A"
+        else:
+            displayed_type = result.patient_type.value
+            auto_type = displayed_type
+
         summary_data = {
             "Property": [
-                "Patient Type",
+                "Auto Classification (자동 분류)",
+                "Applied Type (적용 타입)",
                 "Baseline SPEP",
                 "Baseline Kappa",
                 "Baseline Lambda"
             ],
             "Value": [
-                result.patient_type.value,
+                auto_type,
+                displayed_type,
                 result.baseline_spep,
                 result.baseline_kappa,
                 result.baseline_lambda
             ]
         }
         pd.DataFrame(summary_data).to_excel(writer, sheet_name="Summary", index=False)
+
+        # Add segments sheet if multiple segments exist
+        if hasattr(result, 'segments') and len(result.segments) > 0:
+            segment_data = []
+            for seg in result.segments:
+                override_text = " (수동 설정)" if seg.is_type_override else ""
+                segment_data.append({
+                    "Segment": seg.segment_id + 1,
+                    "Start Date": seg.start_date.strftime("%Y-%m-%d"),
+                    "Patient Type": f"{seg.patient_type.value}{override_text}",
+                    "Baseline SPEP": seg.baseline_spep,
+                    "Baseline Kappa": seg.baseline_kappa,
+                    "Baseline Lambda": seg.baseline_lambda
+                })
+            pd.DataFrame(segment_data).to_excel(writer, sheet_name="Segments", index=False)
 
         # Detailed results
         df = create_results_dataframe(result)
@@ -381,6 +406,14 @@ def main():
                 # Show initial auto classification
                 st.metric("자동 분류", classification.patient_type.value)
                 st.caption(classification.classification_reason)
+
+                # Show applied type if different from auto classification
+                if initial_type != "자동 분류":
+                    st.metric("적용 타입", initial_type, delta="수동 설정", delta_color="off")
+                elif result.segments and len(result.segments) > 0:
+                    applied_type = result.segments[0].patient_type.value
+                    if applied_type != classification.patient_type.value:
+                        st.metric("적용 타입", applied_type, delta="수동 설정", delta_color="off")
 
             with col2:
                 st.subheader("Baseline Values (초기)")
@@ -545,7 +578,9 @@ def main():
 
             # Download button
             st.subheader("💾 결과 다운로드")
-            excel_data = export_to_excel(result)
+            # Pass classification and initial_type for proper export
+            initial_type_for_export = initial_type if initial_type != "자동 분류" else None
+            excel_data = export_to_excel(result, classification, initial_type_for_export)
             st.download_button(
                 label="📥 Excel로 다운로드",
                 data=excel_data,
