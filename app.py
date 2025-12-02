@@ -99,6 +99,20 @@ def create_results_dataframe(result):
         if tp.kappa is not None and tp.lambda_ is not None and tp.lambda_ != 0:
             flc_ratio = round(tp.kappa / tp.lambda_, 2)
 
+        # Calculate iFLC, uFLC, dFLC based on patient type
+        iflc = None
+        uflc = None
+        dflc = None
+
+        if tp.kappa is not None and tp.lambda_ is not None:
+            dflc = round(abs(tp.kappa - tp.lambda_), 1)  # dFLC = |Kappa - Lambda|
+            if is_lcd_type:
+                # For LCD_Kappa: iFLC=Kappa, uFLC=Lambda
+                # For LCD_Lambda: iFLC=Lambda, uFLC=Kappa
+                is_kappa_type = current_type == PatientType.LCD_KAPPA
+                iflc = round(tp.kappa, 1) if is_kappa_type else round(tp.lambda_, 1)
+                uflc = round(tp.lambda_, 1) if is_kappa_type else round(tp.kappa, 1)
+
         row = {
             "Timepoint": display_idx,
             "Date": tp.date.strftime("%Y-%m-%d") if tp.date else None,
@@ -114,6 +128,13 @@ def create_results_dataframe(result):
         row["Kappa"] = tp.kappa
         row["Lambda"] = tp.lambda_
         row["FLC Ratio"] = flc_ratio
+        row["dFLC"] = dflc  # |Kappa - Lambda|
+
+        # Add iFLC and uFLC for LCD type patients
+        if is_lcd_type:
+            row["iFLC"] = iflc
+            row["uFLC"] = uflc
+
         row["UPEP"] = tp.upep
 
         # Add type-specific columns with clear labels
@@ -158,16 +179,20 @@ def get_response_summary(result):
     # Filter out combined timepoints
     active_timepoints = [tp for tp in result.timepoints if not (hasattr(tp, 'is_combined') and tp.is_combined)]
 
+    # Response order for comparison (best to worst for treatment response)
+    response_order = [ResponseType.SD, ResponseType.MR, ResponseType.PR, ResponseType.VGPR, ResponseType.CR]
+
     for tp in active_timepoints:
         if tp.confirmed_response:
             if tp.confirmed_response == ResponseType.CR and cr_date is None:
                 cr_date = tp.date
-            if tp.confirmed_response == ResponseType.PROGRESSION and progression_date is None:
+            # Track progression (including type change progression)
+            if tp.confirmed_response in [ResponseType.PROGRESSION, ResponseType.PROGRESSION_TYPE_CHANGE] and progression_date is None:
                 progression_date = tp.date
-            if tp.confirmed_response != ResponseType.PROGRESSION:
-                order = [ResponseType.SD, ResponseType.MR, ResponseType.PR, ResponseType.VGPR, ResponseType.CR]
-                if best_response is None or (tp.confirmed_response in order and
-                    order.index(tp.confirmed_response) > order.index(best_response)):
+            # Only consider standard responses for best response
+            if tp.confirmed_response in response_order:
+                if best_response is None or (best_response in response_order and
+                    response_order.index(tp.confirmed_response) > response_order.index(best_response)):
                     best_response = tp.confirmed_response
                     best_response_date = tp.date
 
@@ -219,7 +244,7 @@ def main():
     st.title("🔬 Multiple Myeloma Response Evaluator")
     st.markdown("""
     다발골수종 치료 반응 평가 도구입니다. Excel 파일을 업로드하면 SPEP, Kappa, Lambda 값을 분석하여
-    치료 반응(bCR, VGPR, PR, MR, Progression)을 평가합니다.
+    치료 반응(nCR, VGPR, PR, MR, Progression)을 평가합니다.
     """)
     st.caption("※ Modified IMWG criteria for real-world data")
 
@@ -400,9 +425,9 @@ def main():
 
             with resp_col2:
                 if summary["cr_date"]:
-                    st.metric("bCR Achieved", summary["cr_date"].strftime("%Y-%m-%d"))
+                    st.metric("nCR Achieved", summary["cr_date"].strftime("%Y-%m-%d"))
                 else:
-                    st.metric("bCR Achieved", "Not achieved")
+                    st.metric("nCR Achieved", "Not achieved")
 
             with resp_col3:
                 if summary["progression_date"]:
@@ -414,6 +439,18 @@ def main():
             st.subheader("📋 Serial Response Evaluation")
             df = create_results_dataframe(result)
 
+            # Add CSS for horizontal scrolling
+            st.markdown("""
+            <style>
+            .stDataFrame {
+                overflow-x: auto !important;
+            }
+            .stDataFrame > div {
+                overflow-x: auto !important;
+            }
+            </style>
+            """, unsafe_allow_html=True)
+
             # Try to style the dataframe (requires jinja2)
             try:
                 def highlight_response(val):
@@ -423,7 +460,7 @@ def main():
                     # Check for LCD Type warning (gold background takes priority)
                     if "(LCD Type 변경 확인!)" in val_str:
                         return "background-color: #FFD700"  # Gold - LCD type check warning
-                    elif val_str.startswith("bCR"):
+                    elif val_str.startswith("nCR"):
                         return "background-color: #90EE90"  # Light green
                     elif val_str.startswith("VGPR"):
                         return "background-color: #98FB98"  # Pale green
@@ -446,6 +483,13 @@ def main():
                             return "background-color: #FFDAB9"  # Abnormal - peach
                     return ""
 
+                def highlight_dflc(val):
+                    """Highlight dFLC when > 100 (LCD type consideration)."""
+                    if val is not None and isinstance(val, (int, float)):
+                        if val > 100:
+                            return "background-color: #FFD700; font-weight: bold"  # Gold - LCD type threshold
+                    return ""
+
                 def highlight_notes(val):
                     """Highlight notes for combination info."""
                     if val is None:
@@ -455,24 +499,32 @@ def main():
                         return "background-color: #E6F3FF"  # Light blue for combination info
                     return ""
 
+                # Build style with available columns
                 styled_df = df.style.map(
                     highlight_response,
                     subset=["Current Response", "Confirmed Response"]
                 ).map(
                     highlight_flc_ratio,
                     subset=["FLC Ratio"]
-                ).map(
-                    highlight_notes,
-                    subset=["Notes"]
                 )
+
+                # Add dFLC highlighting if column exists
+                if "dFLC" in df.columns:
+                    styled_df = styled_df.map(highlight_dflc, subset=["dFLC"])
+
+                # Add notes highlighting
+                styled_df = styled_df.map(highlight_notes, subset=["Notes"])
+
                 st.dataframe(styled_df, use_container_width=True, height=400)
             except (ImportError, AttributeError):
                 # Fallback: show without styling if jinja2 is not installed
                 st.dataframe(df, use_container_width=True, height=400)
 
             # Add caption explaining the columns
+            st.caption("※ dFLC = |Kappa - Lambda| (금색: >100, LCD 타입 기준)")
             if result.patient_type.is_lcd_type():
-                st.caption("※ %Change (iFLC from BL): involved FLC의 Baseline 대비 변화율 | iFLC Nadir: involved FLC의 최저값 | FLC Ratio 정상범위: 0.26~1.65 (녹색)")
+                st.caption("※ iFLC: involved FLC (LCD_Kappa→Kappa, LCD_Lambda→Lambda) | uFLC: uninvolved FLC")
+                st.caption("※ %Change (iFLC from BL): iFLC의 Baseline 대비 변화율 | iFLC Nadir: iFLC 최저값 | FLC Ratio 정상범위: 0.26~1.65 (녹색)")
             elif result.patient_type.is_igg_type():
                 st.caption("※ %Change (SPEP from BL): SPEP의 Baseline 대비 변화율 | SPEP Nadir: SPEP 최저값")
             st.caption("※ 3일 이내 측정된 값은 자동으로 결합되어 평가됩니다. [결합: ...]은 다른 날짜에서 가져온 값을 표시합니다.")
@@ -488,7 +540,7 @@ def main():
 
             stat_col1.metric("Total Timepoints", total_timepoints)
             stat_col2.metric("Evaluable", evaluable)
-            stat_col3.metric("bCR Count", sum(1 for tp in active_timepoints if tp.confirmed_response == ResponseType.CR))
+            stat_col3.metric("nCR Count", sum(1 for tp in active_timepoints if tp.confirmed_response == ResponseType.CR))
             stat_col4.metric("Progression Count", sum(1 for tp in active_timepoints if tp.confirmed_response == ResponseType.PROGRESSION))
 
             # Download button
@@ -588,7 +640,7 @@ def main():
             | **MR** | Baseline 대비 ≥25% 감소 |
             | **PR** | Baseline 대비 ≥50% 감소 |
             | **VGPR** | Baseline 대비 ≥90% 감소 |
-            | **bCR** | SPEP = 0 (biochemical CR) |
+            | **nCR** | SPEP = 0 (near Complete Response) |
             | **PD** | Nadir 대비 ≥25% 증가 **AND** 절대 증가 ≥0.5 g/dL |
             | **LCD Type 변경 확인!** | \|Kappa-Lambda\| > 100 발견 시 |
             """)
@@ -600,7 +652,7 @@ def main():
             | 반응 | 기준 |
             |:----:|:-----|
             | **Progression (Type 변경!)** | SPEP ≥ 0.5 (IgG 타입 변경 가능성) |
-            | **bCR** | FLC ratio 정상화 (0.26~1.65) |
+            | **nCR** | FLC ratio 정상화 (0.26~1.65) |
             | **VGPR** | Baseline 대비 iFLC ≥90% 감소 또는 iFLC < 100 |
             | **PR** | Baseline 대비 iFLC ≥50% 감소 |
             | **PD** | Nadir 대비 iFLC ≥25% 증가 **AND** 절대 증가 ≥100 |
