@@ -21,7 +21,7 @@ class ResponseType(Enum):
     SD = "SD"  # Stable Disease
     PROGRESSION = "Progression"
     PROGRESSION_TYPE_CHANGE = "Progression (Type 변경 가능!)"  # Progression with possible type change
-    LCD_TYPE_CHECK = "LCD Type 변경 확인 필요!"  # FLC difference > 100 in IgG patient
+    LCD_TYPE_CHECK = "LCD Type 변경 확인 필요!"  # FLC difference > 100 in Heavy chain patient
     NOT_EVALUABLE = "NE"  # Not Evaluable
 
     def __str__(self):
@@ -76,7 +76,7 @@ class ResponseEvaluator:
     Evaluator for multiple myeloma treatment response.
     (Modified IMWG criteria for real-world data)
 
-    For IgG type patients (SPEP >= 0.5):
+    For Heavy chain type patients (SPEP >= 0.5):
     - Response is based on M-protein (SPEP) reduction from baseline
     - MR: >= 25% reduction
     - PR: >= 50% reduction
@@ -86,7 +86,7 @@ class ResponseEvaluator:
     - LCD Type Check: If |Kappa-Lambda| > 100 at any time → "LCD Type 변경 확인 필요!"
 
     For LCD type patients (SPEP < 0.5, |Kappa-Lambda| > 100):
-    - Progression (Type Change): SPEP >= 0.5 (possible change to IgG type)
+    - Progression (Type Change): SPEP >= 0.5 (possible change to Heavy chain type)
     - nCR: FLC ratio (Kappa/Lambda) in normal range (0.26~1.65)
     - VGPR: iFLC >= 90% decrease from baseline OR iFLC < 100
     - PR: iFLC >= 50% decrease from baseline
@@ -96,12 +96,12 @@ class ResponseEvaluator:
     Confirmation requires 2 consecutive identical responses.
     """
 
-    # IgG Response thresholds (percentage reduction from baseline)
+    # Heavy chain Response thresholds (percentage reduction from baseline)
     MR_THRESHOLD = 25.0
     PR_THRESHOLD = 50.0
     VGPR_THRESHOLD = 90.0
 
-    # IgG Progression thresholds (both must be met)
+    # Heavy chain Progression thresholds (both must be met)
     IGG_PD_PERCENT_THRESHOLD = 25.0  # >= 25% increase from nadir
     IGG_PD_ABSOLUTE_THRESHOLD = 0.5  # >= 0.5 g/dL absolute increase from nadir
 
@@ -409,7 +409,7 @@ class ResponseEvaluator:
         lab_data: LabData,
         classification: ClassificationResult
     ) -> list[TimePointResult]:
-        """Evaluate IgG type patients based on M-protein (SPEP)."""
+        """Evaluate Heavy chain type patients based on M-protein (SPEP)."""
         timepoints = []
         baseline = classification.baseline_spep
 
@@ -568,7 +568,7 @@ class ResponseEvaluator:
         lambda_: Optional[float] = None
     ) -> tuple[ResponseType, str]:
         """
-        Determine response type for IgG patients based on SPEP value.
+        Determine response type for Heavy chain patients based on SPEP value.
 
         Returns:
             Tuple of (ResponseType, notes string)
@@ -626,7 +626,7 @@ class ResponseEvaluator:
         Evaluate LCD type patients based on involved free light chain (iFLC).
 
         LCD Response Criteria:
-        - Progression (Type Change): SPEP >= 0.5 (possible change to IgG type)
+        - Progression (Type Change): SPEP >= 0.5 (possible change to Heavy chain type)
         - CR: FLC ratio (Kappa/Lambda) in normal range (0.26~1.65)
         - VGPR: iFLC >= 90% decrease from baseline OR iFLC < 100
         - PR: iFLC >= 50% decrease from baseline
@@ -793,7 +793,7 @@ class ResponseEvaluator:
         Determine response type for LCD patients based on FLC value.
 
         LCD Response Criteria:
-        - Progression (Type Change): SPEP >= 0.5 (possible change to IgG type)
+        - Progression (Type Change): SPEP >= 0.5 (possible change to Heavy chain type)
         - CR: FLC ratio (Kappa/Lambda) in normal range (0.26~1.65)
         - VGPR: iFLC >= 90% decrease from baseline OR iFLC < 100
         - PR: iFLC >= 50% decrease from baseline
@@ -803,9 +803,9 @@ class ResponseEvaluator:
         Returns:
             Tuple of (ResponseType, notes string)
         """
-        # Check for type change first: SPEP >= 0.5 indicates possible change to IgG type
+        # Check for type change first: SPEP >= 0.5 indicates possible change to Heavy chain type
         if spep is not None and spep >= self.SPEP_THRESHOLD:
-            return ResponseType.PROGRESSION_TYPE_CHANGE, f"SPEP ({spep:.2f}) >= 0.5, possible type change to IgG"
+            return ResponseType.PROGRESSION_TYPE_CHANGE, f"SPEP ({spep:.2f}) >= 0.5, possible type change to Heavy chain"
 
         # Check for CR: FLC ratio in normal range (0.26~1.65)
         if self._check_flc_ratio_normal(kappa, lambda_):
@@ -865,7 +865,7 @@ class ResponseEvaluator:
         segment: TreatmentSegment,
         end_idx: int = None
     ) -> list[TimePointResult]:
-        """Evaluate IgG type patients for a specific treatment segment."""
+        """Evaluate Heavy chain type patients for a specific treatment segment."""
         timepoints = []
         baseline = classification.baseline_spep
 
