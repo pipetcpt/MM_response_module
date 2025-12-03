@@ -301,7 +301,7 @@ def main():
 
         # Initial type override
         st.sidebar.subheader("📋 초기 타입 설정")
-        type_options = ["자동 분류", "IgG_Kappa", "IgG_Lambda", "LCD_Kappa", "LCD_Lambda"]
+        type_options = ["자동 분류", "Heavy chain_Kappa", "Heavy chain_Lambda", "LCD_Kappa", "LCD_Lambda"]
         initial_type = st.sidebar.selectbox(
             "환자 타입 (첫 번째 시점)",
             type_options,
@@ -355,7 +355,7 @@ def main():
             with col2:
                 change_type = st.selectbox(
                     f"타입",
-                    ["IgG_Kappa", "IgG_Lambda", "LCD_Kappa", "LCD_Lambda"],
+                    ["Heavy chain_Kappa", "Heavy chain_Lambda", "LCD_Kappa", "LCD_Lambda"],
                     key=f"type_change_type_{i}"
                 )
             if change_date:
@@ -368,8 +368,8 @@ def main():
 
         type_overrides_dt = {}
         type_map = {
-            "IgG_Kappa": PatientType.IGG_KAPPA,
-            "IgG_Lambda": PatientType.IGG_LAMBDA,
+            "Heavy chain_Kappa": PatientType.IGG_KAPPA,
+            "Heavy chain_Lambda": PatientType.IGG_LAMBDA,
             "LCD_Kappa": PatientType.LCD_KAPPA,
             "LCD_Lambda": PatientType.LCD_LAMBDA,
         }
@@ -679,7 +679,7 @@ def main():
                                         elif metric == "dFLC":
                                             st.caption("LCD 타입 기준: > 100")
                                         elif metric == "SPEP":
-                                            st.caption("IgG 타입 기준: ≥ 0.5 g/dL")
+                                            st.caption("Heavy chain 타입 기준: ≥ 0.5 g/dL")
             else:
                 st.info("📊 차트를 보려면 위에서 지표를 선택하세요.")
 
@@ -703,9 +703,9 @@ def main():
         # Patient Classification
         st.markdown("#### 환자 분류")
         st.markdown("""
-        **1. IgG 타입** (SPEP ≥ 0.5 g/dL)
-        - **IgG_Kappa**: Kappa > Lambda
-        - **IgG_Lambda**: Lambda ≥ Kappa
+        **1. Heavy chain 타입** (SPEP ≥ 0.5 g/dL)
+        - **Heavy chain_Kappa**: Kappa > Lambda
+        - **Heavy chain_Lambda**: Lambda ≥ Kappa
 
         **2. LCD 타입** (SPEP < 0.5 g/dL AND |Kappa-Lambda| > 100)
         - **LCD_Kappa**: Kappa > Lambda (iFLC = Kappa)
@@ -720,7 +720,7 @@ def main():
         col1, col2 = st.columns(2)
 
         with col1:
-            st.markdown("#### IgG 타입 반응 평가")
+            st.markdown("#### Heavy chain 타입 반응 평가")
             st.markdown("""
             | 반응 | 기준 |
             |:----:|:-----|
@@ -738,7 +738,7 @@ def main():
             st.markdown("""
             | 반응 | 기준 |
             |:----:|:-----|
-            | **Progression (Type 변경!)** | SPEP ≥ 0.5 (IgG 타입 변경 가능성) |
+            | **Progression (Type 변경!)** | SPEP ≥ 0.5 (Heavy chain 타입 변경 가능성) |
             | **nCR** | FLC ratio 정상화 (0.26~1.65) |
             | **VGPR** | Baseline 대비 iFLC ≥90% 감소 또는 iFLC < 100 |
             | **PR** | Baseline 대비 iFLC ≥50% 감소 |

@@ -9,14 +9,14 @@ from dataclasses import dataclass
 
 class PatientType(Enum):
     """Multiple myeloma patient types based on M-protein and FLC."""
-    IGG_KAPPA = "IgG_Kappa"
-    IGG_LAMBDA = "IgG_Lambda"
+    IGG_KAPPA = "Heavy chain_Kappa"
+    IGG_LAMBDA = "Heavy chain_Lambda"
     LCD_KAPPA = "LCD_Kappa"  # Light Chain Disease
     LCD_LAMBDA = "LCD_Lambda"
     UNCLASSIFIED = "Unclassified"
 
     def is_igg_type(self) -> bool:
-        """Check if this is an IgG type (measurable M-protein)."""
+        """Check if this is a Heavy chain type (measurable M-protein)."""
         return self in (PatientType.IGG_KAPPA, PatientType.IGG_LAMBDA)
 
     def is_lcd_type(self) -> bool:
@@ -48,8 +48,8 @@ class PatientClassifier:
 
     Classification Rules:
     1. If SPEP (M-protein) >= 0.5 g/dL:
-       - Kappa > Lambda → IgG_Kappa
-       - Lambda >= Kappa → IgG_Lambda
+       - Kappa > Lambda → Heavy chain_Kappa
+       - Lambda >= Kappa → Heavy chain_Lambda
     2. If SPEP < 0.5 g/dL and |Kappa - Lambda| > 100:
        - Kappa > Lambda → LCD_Kappa
        - Lambda > Kappa → LCD_Lambda
@@ -86,7 +86,7 @@ class PatientClassifier:
                 classification_reason="Missing required baseline values"
             )
 
-        # IgG type classification (SPEP >= 0.5)
+        # Heavy chain type classification (SPEP >= 0.5)
         if spep >= self.SPEP_THRESHOLD:
             if kappa > lambda_:
                 return ClassificationResult(
